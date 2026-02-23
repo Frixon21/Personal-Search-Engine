@@ -2,6 +2,7 @@ import sqlite3
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+import docx
 
 from pse_common import INDEXABLE_EXTS, db_path_for_root, iter_files, tokenize
 
@@ -43,9 +44,41 @@ def init_schema(conn: sqlite3.Connection) -> None:
 
 
 def extract_text(path: str, ext: str, max_bytes: int = 2_000_000) -> Optional[str]:
+    """
+    Extract text from supported files.
+    text files: read bytes with cap
+    docx: extract paragraphs using python-docx
+    """
     if ext not in INDEXABLE_EXTS:
         return None
 
+    if ext == ".docx":
+        try:
+            from docx import Document  # python-docx
+        except Exception:
+            # If python-docx isn't available, skip docx gracefully
+            return None
+
+        try:
+            doc = Document(path)
+        except Exception:
+            return None
+
+        # Join paragraph text, keep it bounded so huge docs do not explode indexing time
+        parts: List[str] = []
+        total_chars = 0
+        char_cap = 2_000_000  # roughly similar scale to max_bytes
+        for p in doc.paragraphs:
+            t = (p.text or "").strip()
+            if not t:
+                continue
+            parts.append(t)
+            total_chars += len(t) + 1
+            if total_chars >= char_cap:
+                break
+        return "\n".join(parts)
+
+    # default: treat as plain text-like
     try:
         with open(path, "rb") as f:
             data = f.read(max_bytes)

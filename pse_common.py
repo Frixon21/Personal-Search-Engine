@@ -18,7 +18,7 @@ class FileEntry:
 
 SKIP_DIRS = {".git", "node_modules", "__pycache__"}
 INDEXABLE_EXTS = {
-    ".txt", ".md", ".py", ".js", ".ts", ".json", ".yaml", ".yml", ".csv", ".log"
+    ".txt", ".md", ".py", ".js", ".ts", ".json", ".yaml", ".yml", ".csv", ".log", ".docx"
 }
 
 INDEX_DB_NAME = ".pse_index.sqlite3"

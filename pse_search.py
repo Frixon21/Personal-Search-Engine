@@ -53,9 +53,37 @@ def content_score(q_terms: List[str], term_counts: Dict[str, int]) -> Tuple[int,
 
 
 def extract_text_best_effort(path: str, ext: str, max_bytes: int = 300_000) -> Optional[str]:
+    """
+    Used for snippets. Not full parsing, just a best effort to get some text out for matching and display.
+    """
     if ext not in INDEXABLE_EXTS:
         return None
 
+    if ext == ".docx":
+        try:
+            from docx import Document  # python-docx
+        except Exception:
+            return None
+
+        try:
+            doc = Document(path)
+        except Exception:
+            return None
+
+        parts: List[str] = []
+        total_chars = 0
+        char_cap = 300_000
+        for p in doc.paragraphs:
+            t = (p.text or "").strip()
+            if not t:
+                continue
+            parts.append(t)
+            total_chars += len(t) + 1
+            if total_chars >= char_cap:
+                break
+        return "\n".join(parts)
+
+    # default: plain text-like
     try:
         with open(path, "rb") as f:
             data = f.read(max_bytes)
