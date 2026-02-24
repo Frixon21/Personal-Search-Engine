@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterable, List, Optional, Tuple
+import unicodedata
 
 
 @dataclass(frozen=True)
@@ -18,7 +19,7 @@ class FileEntry:
 
 SKIP_DIRS = {".git", "node_modules", "__pycache__"}
 INDEXABLE_EXTS = {
-    ".txt", ".md", ".py", ".js", ".ts", ".json", ".yaml", ".yml", ".csv", ".log", ".docx"
+    ".txt", ".md", ".py", ".js", ".ts", ".json", ".yaml", ".yml", ".csv", ".log", ".docx", ".pdf"
 }
 
 INDEX_DB_NAME = ".pse_index.sqlite3"
@@ -38,9 +39,45 @@ WEEKDAY_MAP = {
 def db_path_for_root(root: Path) -> Path:
     return root.expanduser().resolve() / INDEX_DB_NAME
 
+def fold_text(s: str) -> str:
+    s = unicodedata.normalize("NFKC", s)
+
+    # Remove invisible / layout chars commonly seen in PDFs
+    s = s.translate({
+        0x00AD: None,  # soft hyphen
+        0x200B: None,  # zero width space
+        0x200C: None,  # zero width non-joiner
+        0x200D: None,  # zero width joiner
+        0xFEFF: None,  # BOM
+    })
+
+    # Normalize common whitespace variants to space
+    s = s.replace("\u00A0", " ")  # NBSP
+    s = s.replace("\u2009", " ")  # thin space
+    s = s.replace("\u202F", " ")  # narrow no-break space
+
+    # Normalize punctuation that often varies in PDFs
+    s = s.translate({
+        ord("’"): ord("'"),
+        ord("‘"): ord("'"),
+        ord("“"): ord('"'),
+        ord("”"): ord('"'),
+        ord("–"): ord("-"),
+        ord("−"): ord("-"),
+        ord("—"): ord("-"),
+    })
+
+    # strip diacritics so “café” matches “cafe”
+    s = unicodedata.normalize("NFKD", s)
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    s = unicodedata.normalize("NFKC", s)
+
+    return s
+
 
 def normalize(s: str) -> str:
-    s = s.lower()
+    s = fold_text(s)
+    s = s.casefold()  # better than lower() for Unicode
     s = re.sub(r"[_\-.]+", " ", s)
     s = re.sub(r"\s+", " ", s).strip()
     return s

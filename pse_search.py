@@ -3,6 +3,8 @@ import sqlite3
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from docx import Document
+import fitz
 
 from pse_common import (
     INDEXABLE_EXTS,
@@ -12,6 +14,7 @@ from pse_common import (
     recency_bonus,
     score_filename,
     tokenize,
+    fold_text,
 )
 
 
@@ -58,13 +61,30 @@ def extract_text_best_effort(path: str, ext: str, max_bytes: int = 300_000) -> O
     """
     if ext not in INDEXABLE_EXTS:
         return None
-
-    if ext == ".docx":
+    
+    if ext == ".pdf":
         try:
-            from docx import Document  # python-docx
+            doc = fitz.open(path)
         except Exception:
             return None
 
+        parts = []
+        total_chars = 0
+        char_cap = 300_000
+
+        for page in doc:
+            text = page.get_text("text")
+            if not text:
+                continue
+            parts.append(text)
+            total_chars += len(text)
+            if total_chars >= char_cap:
+                break
+
+        doc.close()
+        return "\n".join(parts)
+
+    if ext == ".docx":
         try:
             doc = Document(path)
         except Exception:
@@ -100,7 +120,7 @@ def extract_text_best_effort(path: str, ext: str, max_bytes: int = 300_000) -> O
 
 
 def highlight_terms(line: str, q_terms: List[str]) -> str:
-    out = line
+    out = fold_text(line)
     for t in sorted(set(q_terms), key=len, reverse=True):
         if not t:
             continue

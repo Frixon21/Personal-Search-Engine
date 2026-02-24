@@ -2,8 +2,8 @@ import sqlite3
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-import docx
-
+from docx import Document
+import fitz
 from pse_common import INDEXABLE_EXTS, db_path_for_root, iter_files, tokenize
 
 
@@ -48,17 +48,34 @@ def extract_text(path: str, ext: str, max_bytes: int = 2_000_000) -> Optional[st
     Extract text from supported files.
     text files: read bytes with cap
     docx: extract paragraphs using python-docx
+    pdf: extract text using fitz (PyMuPDF)
     """
+    if ext == ".pdf":   
+        try:
+            doc = fitz.open(path)
+        except Exception:
+            return None
+
+        parts = []
+        total_chars = 0
+        char_cap = 2_000_000
+
+        for page in doc:
+            text = page.get_text("text")
+            if not text:
+                continue
+            parts.append(text)
+            total_chars += len(text)
+            if total_chars >= char_cap:
+                break
+
+        doc.close()
+        return "\n".join(parts)
+        
     if ext not in INDEXABLE_EXTS:
         return None
 
     if ext == ".docx":
-        try:
-            from docx import Document  # python-docx
-        except Exception:
-            # If python-docx isn't available, skip docx gracefully
-            return None
-
         try:
             doc = Document(path)
         except Exception:
