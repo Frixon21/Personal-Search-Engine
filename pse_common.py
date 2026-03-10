@@ -1,5 +1,6 @@
 import os
 import re
+import sqlite3
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -19,10 +20,14 @@ class FileEntry:
 
 SKIP_DIRS = {".git", "node_modules", "__pycache__"}
 INDEXABLE_EXTS = {
-    ".txt", ".md", ".py", ".js", ".ts", ".json", ".yaml", ".yml", ".csv", ".log", ".docx", ".pdf"
+    ".txt", ".md", ".py", ".js", ".ts", ".json", ".yaml", ".yml", ".csv", ".log",
+    ".pdf", ".doc", ".docx", ".rtf", ".odt", ".tex", ".html", ".htm",
+    ".xls", ".xlsx", ".ppt", ".pptx",
 }
 
 INDEX_DB_NAME = ".pse_index.sqlite3"
+INDEX_SCHEMA_VERSION = 2
+PREVIEW_CHAR_CAP = 10_000
 
 
 WEEKDAY_MAP = {
@@ -38,6 +43,49 @@ WEEKDAY_MAP = {
 
 def db_path_for_root(root: Path) -> Path:
     return root.expanduser().resolve() / INDEX_DB_NAME
+
+
+def index_db_artifact_paths(db_path: Path) -> List[Path]:
+    return [
+        db_path,
+        Path(str(db_path) + "-wal"),
+        Path(str(db_path) + "-shm"),
+    ]
+
+
+def get_index_schema_version(db_path: Path) -> int:
+    if not db_path.exists():
+        return 0
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        row = conn.execute("PRAGMA user_version").fetchone()
+    except sqlite3.Error:
+        return 0
+    finally:
+        conn.close()
+
+    return int(row[0]) if row else 0
+
+
+def open_db_connection(db_path: Path, pragmas: Iterable[str] = ()) -> sqlite3.Connection:
+    conn = sqlite3.connect(str(db_path))
+    for pragma in pragmas:
+        conn.execute(f"PRAGMA {pragma};")
+    return conn
+
+
+def set_index_schema_version(conn: sqlite3.Connection) -> None:
+    conn.execute(f"PRAGMA user_version = {INDEX_SCHEMA_VERSION}")
+
+
+def reset_index_db(db_path: Path) -> None:
+    for artifact in index_db_artifact_paths(db_path):
+        try:
+            artifact.unlink()
+        except FileNotFoundError:
+            continue
+
 
 def fold_text(s: str) -> str:
     s = unicodedata.normalize("NFKC", s)
@@ -57,17 +105,18 @@ def fold_text(s: str) -> str:
     s = s.replace("\u202F", " ")  # narrow no-break space
 
     # Normalize punctuation that often varies in PDFs
-    s = s.translate({
-        ord("’"): ord("'"),
-        ord("‘"): ord("'"),
-        ord("“"): ord('"'),
-        ord("”"): ord('"'),
-        ord("–"): ord("-"),
-        ord("−"): ord("-"),
-        ord("—"): ord("-"),
-    })
+    for old, new in {
+        "\u2019": "'",
+        "\u2018": "'",
+        "\u201c": '"',
+        "\u201d": '"',
+        "\u2013": "-",
+        "\u2212": "-",
+        "\u2014": "-",
+    }.items():
+        s = s.replace(old, new)
 
-    # strip diacritics so “café” matches “cafe”
+    # Strip diacritics so accented text still matches plain ASCII queries.
     s = unicodedata.normalize("NFKD", s)
     s = "".join(ch for ch in s if not unicodedata.combining(ch))
     s = unicodedata.normalize("NFKC", s)
@@ -233,3 +282,4 @@ def recency_bonus(mtime: float) -> int:
     if age_days < 30:
         return 1
     return 0
+

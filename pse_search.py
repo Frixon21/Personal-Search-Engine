@@ -1,16 +1,17 @@
+from dataclasses import dataclass
 import re
 import sqlite3
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-from docx import Document
-import fitz
 
 from pse_common import (
-    INDEXABLE_EXTS,
+    INDEX_SCHEMA_VERSION,
     db_path_for_root,
+    get_index_schema_version,
     human_size,
     metadata_bonus,
+    open_db_connection,
     recency_bonus,
     score_filename,
     tokenize,
@@ -18,10 +19,17 @@ from pse_common import (
 )
 
 
-def connect_db(db_path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(db_path))
-    conn.execute("PRAGMA temp_store=MEMORY;")
-    return conn
+SEARCH_DB_PRAGMAS = ("temp_store=MEMORY",)
+
+
+@dataclass(frozen=True)
+class RankedDoc:
+    path: str
+    size: int
+    mtime: float
+    preview_text: Optional[str]
+    debug: Tuple[int, int, int, int, int, int, int]
+    total: int
 
 
 def gather_content_candidates(conn: sqlite3.Connection, q_terms: List[str]) -> Dict[int, Dict[str, int]]:
@@ -55,68 +63,28 @@ def content_score(q_terms: List[str], term_counts: Dict[str, int]) -> Tuple[int,
     return unique, total
 
 
-def extract_text_best_effort(path: str, ext: str, max_bytes: int = 300_000) -> Optional[str]:
-    """
-    Used for snippets. Not full parsing, just a best effort to get some text out for matching and display.
-    """
-    if ext not in INDEXABLE_EXTS:
+def fetch_doc_details(
+    conn: sqlite3.Connection,
+    doc_id: int,
+) -> Optional[Tuple[str, str, int, float, Optional[str]]]:
+    row = conn.execute(
+        """
+        SELECT d.path, d.ext, d.size, d.mtime, p.preview_text
+        FROM docs AS d
+        LEFT JOIN doc_previews AS p ON p.doc_id = d.doc_id
+        WHERE d.doc_id = ?
+        """,
+        (doc_id,),
+    ).fetchone()
+    if not row:
         return None
-    
-    if ext == ".pdf":
-        try:
-            doc = fitz.open(path)
-        except Exception:
-            return None
-
-        parts = []
-        total_chars = 0
-        char_cap = 300_000
-
-        for page in doc:
-            text = page.get_text("text")
-            if not text:
-                continue
-            parts.append(text)
-            total_chars += len(text)
-            if total_chars >= char_cap:
-                break
-
-        doc.close()
-        return "\n".join(parts)
-
-    if ext == ".docx":
-        try:
-            doc = Document(path)
-        except Exception:
-            return None
-
-        parts: List[str] = []
-        total_chars = 0
-        char_cap = 300_000
-        for p in doc.paragraphs:
-            t = (p.text or "").strip()
-            if not t:
-                continue
-            parts.append(t)
-            total_chars += len(t) + 1
-            if total_chars >= char_cap:
-                break
-        return "\n".join(parts)
-
-    # default: plain text-like
-    try:
-        with open(path, "rb") as f:
-            data = f.read(max_bytes)
-    except (PermissionError, FileNotFoundError, OSError):
-        return None
-
-    try:
-        return data.decode("utf-8")
-    except UnicodeDecodeError:
-        try:
-            return data.decode("latin-1")
-        except UnicodeDecodeError:
-            return data.decode("utf-8", errors="ignore")
+    return (
+        str(row[0]),
+        str(row[1]),
+        int(row[2]),
+        float(row[3]),
+        str(row[4]) if row[4] is not None else None,
+    )
 
 
 def highlight_terms(line: str, q_terms: List[str]) -> str:
@@ -128,19 +96,18 @@ def highlight_terms(line: str, q_terms: List[str]) -> str:
     return out
 
 
-def best_effort_snippet(path: str, ext: str, q_terms: List[str], max_lines: int = 2) -> Optional[List[str]]:
-    text = extract_text_best_effort(path, ext)
-    if not text or not q_terms:
+def best_effort_snippet(preview_text: Optional[str], q_terms: List[str], max_lines: int = 2) -> Optional[List[str]]:
+    if not preview_text or not q_terms:
         return None
 
-    lines = text.splitlines()
+    lines = preview_text.splitlines()
     qset = set(q_terms)
 
     for i, line in enumerate(lines):
         toks = set(tokenize(line))
         if qset.intersection(toks):
-            # Return at most 2 lines: the hit line and one around it
-            start = max(0, i - 0)
+            # Return at most 2 lines: the hit line and one after it.
+            start = max(0, i)
             end = min(len(lines), i + 2)
             out: List[str] = []
             for j in range(start, end):
@@ -180,7 +147,13 @@ def overall_score(
     )
 
 
-def query(root: Path, query_str: str, max_results: int = 20, debug: bool = False) -> None:
+def query(
+    root: Path,
+    query_str: str,
+    max_results: int = 20,
+    debug: bool = False,
+    show_snippets: bool = False,
+) -> None:
     root = root.expanduser().resolve()
     dbp = db_path_for_root(root)
     if not dbp.exists():
@@ -188,31 +161,42 @@ def query(root: Path, query_str: str, max_results: int = 20, debug: bool = False
         print("Run: python pse_index.py index <root>")
         return
 
-    conn = connect_db(dbp)
+    schema_version = get_index_schema_version(dbp)
+    if schema_version < INDEX_SCHEMA_VERSION:
+        print(f"Index at {dbp} is outdated and must be rebuilt before searching.")
+        print("Run: python pse_index.py index <root>")
+        return
+    if schema_version > INDEX_SCHEMA_VERSION:
+        print(
+            f"Index at {dbp} uses schema version {schema_version}, "
+            f"but this code expects {INDEX_SCHEMA_VERSION}."
+        )
+        return
+
+    show_snippets = show_snippets or debug
+
+    conn = open_db_connection(dbp, SEARCH_DB_PRAGMAS)
     try:
-        t0 = time.time()
+        t0 = time.perf_counter()
 
         q_terms = tokenize(query_str)
         cand = gather_content_candidates(conn, q_terms)
 
-        # Union with filename-only candidates
+        # Union with filename-only candidates.
         for doc_id in filename_candidate_docs(conn, query_str):
             cand.setdefault(doc_id, {})
 
-        ranked: List[Tuple[Tuple[int, int, int, int, int, int, int], int, int]] = []
         # Store:
         # - debug tuple: (cu, ct, fn_hits, fn_sub, meta, fn_pos, rec)
-        # - doc_id
+        # - doc details needed for output
         # - overall_score int
+        ranked: List[RankedDoc] = []
         for doc_id, per_term_counts in cand.items():
-            row = conn.execute(
-                "SELECT path, ext, size, mtime FROM docs WHERE doc_id = ?",
-                (doc_id,),
-            ).fetchone()
-            if not row:
+            doc_details = fetch_doc_details(conn, doc_id)
+            if doc_details is None:
                 continue
 
-            path, ext, size, mtime = str(row[0]), str(row[1]), int(row[2]), float(row[3])
+            path, ext, size, mtime, preview_text = doc_details
             name = Path(path).stem
 
             cu, ct = content_score(q_terms, per_term_counts)
@@ -222,16 +206,25 @@ def query(root: Path, query_str: str, max_results: int = 20, debug: bool = False
 
             total = overall_score(cu, ct, fn_hits, fn_sub, meta, rec)
             dbg = (cu, ct, fn_hits, fn_sub, meta, fn_pos, rec)
-            ranked.append((dbg, doc_id, total))
+            ranked.append(
+                RankedDoc(
+                    path=path,
+                    size=size,
+                    mtime=mtime,
+                    preview_text=preview_text,
+                    debug=dbg,
+                    total=total,
+                )
+            )
 
-        # Sort primarily by overall score, then by debug tuple
-        ranked.sort(key=lambda x: (x[2], x[0]), reverse=True)
-        t1 = time.time()
+        # Sort primarily by overall score, then by debug tuple.
+        ranked.sort(key=lambda doc: (doc.total, doc.debug), reverse=True)
+        query_time = time.perf_counter() - t0
 
         if debug:
             print(f"Index DB: {dbp}")
             print(f"Query terms: {q_terms}")
-            print(f"Candidates: {len(ranked):,} | Time: {(t1 - t0):.3f}s")
+            print(f"Candidates: {len(ranked):,} | query_time={query_time:.3f}s")
             print()
             print("Legend:")
             print("  content=a/b  -> unique query terms matched / total query terms")
@@ -243,39 +236,36 @@ def query(root: Path, query_str: str, max_results: int = 20, debug: bool = False
             print()
             print(f"Showing top {min(max_results, len(ranked))}\n")
 
-        for idx, (dbg, doc_id, total) in enumerate(ranked[:max_results], start=1):
-            row = conn.execute(
-                "SELECT path, ext, size, mtime FROM docs WHERE doc_id = ?",
-                (doc_id,),
-            ).fetchone()
-            if not row:
-                continue
+        for idx, doc in enumerate(ranked[:max_results], start=1):
+            dt = time.strftime("%Y-%m-%d %H:%M", time.localtime(doc.mtime))
 
-            path, ext, size, mtime = str(row[0]), str(row[1]), int(row[2]), float(row[3])
-            dt = time.strftime("%Y-%m-%d %H:%M", time.localtime(mtime))
-
-            cu, ct, fn_hits, fn_sub, meta, fn_pos, rec = dbg
+            cu, ct, fn_hits, fn_sub, meta, fn_pos, rec = doc.debug
 
             if debug:
                 print(
-                    f"#{idx}  score={total}  "
+                    f"#{idx}  score={doc.total}  "
                     f"[content={cu}/{len(q_terms)} hits={ct} | "
                     f"fn={fn_hits} sub={fn_sub} meta={meta} rec={rec}]"
                 )
             else:
-                print(f"#{idx}  score={total}")
+                print(f"#{idx}  score={doc.total}")
 
-            print(f"  {path}")
+            print(f"  {doc.path}")
 
             if debug:
-                print(f"  modified={dt}  size={human_size(size)}")
+                print(f"  modified={dt}  size={human_size(doc.size)}")
 
-            snip = best_effort_snippet(path, ext, q_terms)
-            if snip:
-                print("  snippet:")
-                for line in snip:
-                    print(f"    {line}")
+            if show_snippets:
+                snip = best_effort_snippet(doc.preview_text, q_terms)
+                if snip:
+                    print("  snippet:")
+                    for line in snip:
+                        print(f"    {line}")
             print()
+
+        if debug:
+            total_time = time.perf_counter() - t0
+            print(f"total_time={total_time:.3f}s")
 
     finally:
         conn.close()
@@ -284,16 +274,20 @@ def query(root: Path, query_str: str, max_results: int = 20, debug: bool = False
 def main() -> None:
     import sys
 
-    # pse_search.py <root> "<query>" [max_results] [--debug]
+    # pse_search.py <root> "<query>" [max_results] [--debug] [--snippets]
     if len(sys.argv) < 3:
-        print('Usage: python pse_search.py <root_folder> "<query>" [max_results] [--debug]')
+        print('Usage: python pse_search.py <root_folder> "<query>" [max_results] [--debug] [--snippets]')
         raise SystemExit(1)
 
     args = sys.argv[1:]
     debug = False
+    show_snippets = False
     if "--debug" in args:
         debug = True
         args = [a for a in args if a != "--debug"]
+    if "--snippets" in args:
+        show_snippets = True
+        args = [a for a in args if a != "--snippets"]
 
     root = Path(args[0])
     # Remaining args: query tokens + maybe max_results
@@ -304,7 +298,7 @@ def main() -> None:
         max_results = 20
         query_str = " ".join(args[1:])
 
-    query(root, query_str, max_results=max_results, debug=debug)
+    query(root, query_str, max_results=max_results, debug=debug, show_snippets=show_snippets)
 
 
 if __name__ == "__main__":
