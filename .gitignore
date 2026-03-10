@@ -2,4 +2,4 @@ __pycache__/
 Files/
 .vscode/*
 old/
-tests/
+tests/*
