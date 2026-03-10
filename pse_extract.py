@@ -33,6 +33,11 @@ RTF_REPLACEMENTS = {
     "tab": "\t",
 }
 
+PARTIAL_BYTE_CAP_EXTS = {
+    ".txt", ".md", ".py", ".js", ".ts", ".json", ".yaml", ".yml", ".csv", ".log",
+    ".html", ".htm", ".tex", ".rtf",
+}
+
 
 class TextBuilder:
     def __init__(self, char_cap: int) -> None:
@@ -59,7 +64,16 @@ class TextBuilder:
         return "".join(self.parts)
 
 
-def extract_text(path: str, ext: str, char_cap: int) -> Optional[str]:
+def supports_partial_byte_cap(ext: str) -> bool:
+    return ext.lower() in PARTIAL_BYTE_CAP_EXTS
+
+
+def extract_text(
+    path: str,
+    ext: str,
+    char_cap: int,
+    max_bytes: Optional[int] = None,
+) -> Optional[str]:
     """
     Shared content extraction used by both indexing and snippets.
 
@@ -79,11 +93,11 @@ def extract_text(path: str, ext: str, char_cap: int) -> Optional[str]:
     if ext == ".pdf":
         return _extract_pdf_text(path, char_cap)
     if ext in {".html", ".htm"}:
-        return _extract_html_text(path, char_cap)
+        return _extract_html_text(path, char_cap, max_bytes=max_bytes)
     if ext == ".tex":
-        return _extract_tex_text(path, char_cap)
+        return _extract_tex_text(path, char_cap, max_bytes=max_bytes)
     if ext == ".rtf":
-        return _extract_rtf_text(path, char_cap)
+        return _extract_rtf_text(path, char_cap, max_bytes=max_bytes)
     if ext == ".docx":
         return _extract_docx_text(path, char_cap)
     if ext == ".odt":
@@ -99,11 +113,18 @@ def extract_text(path: str, ext: str, char_cap: int) -> Optional[str]:
     if ext == ".ppt":
         return _extract_ppt_via_com(path, char_cap)
 
-    return _extract_plain_text(path, char_cap)
+    return _extract_plain_text(path, char_cap, max_bytes=max_bytes)
 
 
 def _byte_cap(char_cap: int, multiplier: int = 4) -> int:
     return max(4096, min(max(1, int(char_cap)) * multiplier, 16_000_000))
+
+
+def _effective_byte_cap(char_cap: int, max_bytes: Optional[int], multiplier: int = 4) -> int:
+    cap = _byte_cap(char_cap, multiplier=multiplier)
+    if max_bytes is None:
+        return cap
+    return max(1, min(cap, int(max_bytes)))
 
 
 def _read_bytes(path: str, byte_cap: int) -> Optional[bytes]:
@@ -152,8 +173,8 @@ def _attr_local(elem: ET.Element, name: str, default: str = "") -> str:
     return default
 
 
-def _extract_plain_text(path: str, char_cap: int) -> Optional[str]:
-    data = _read_bytes(path, _byte_cap(char_cap, multiplier=1))
+def _extract_plain_text(path: str, char_cap: int, max_bytes: Optional[int] = None) -> Optional[str]:
+    data = _read_bytes(path, _effective_byte_cap(char_cap, max_bytes, multiplier=1))
     if data is None:
         return None
     return _decode_bytes(data)[:char_cap]
@@ -185,8 +206,8 @@ def _extract_pdf_text(path: str, char_cap: int) -> Optional[str]:
     return _clean_visible_text(builder.build())
 
 
-def _extract_html_text(path: str, char_cap: int) -> Optional[str]:
-    data = _read_bytes(path, _byte_cap(char_cap, multiplier=4))
+def _extract_html_text(path: str, char_cap: int, max_bytes: Optional[int] = None) -> Optional[str]:
+    data = _read_bytes(path, _effective_byte_cap(char_cap, max_bytes, multiplier=4))
     if data is None:
         return None
 
@@ -203,8 +224,8 @@ def _extract_html_text(path: str, char_cap: int) -> Optional[str]:
     return _clean_visible_text(soup.get_text("\n"))[:char_cap]
 
 
-def _extract_tex_text(path: str, char_cap: int) -> Optional[str]:
-    data = _read_bytes(path, _byte_cap(char_cap, multiplier=4))
+def _extract_tex_text(path: str, char_cap: int, max_bytes: Optional[int] = None) -> Optional[str]:
+    data = _read_bytes(path, _effective_byte_cap(char_cap, max_bytes, multiplier=4))
     if data is None:
         return None
 
@@ -308,8 +329,8 @@ def _rtf_to_text(content: str, char_cap: int) -> str:
     return _clean_visible_text(builder.build())
 
 
-def _extract_rtf_text(path: str, char_cap: int) -> Optional[str]:
-    data = _read_bytes(path, _byte_cap(char_cap, multiplier=4))
+def _extract_rtf_text(path: str, char_cap: int, max_bytes: Optional[int] = None) -> Optional[str]:
+    data = _read_bytes(path, _effective_byte_cap(char_cap, max_bytes, multiplier=4))
     if data is None:
         return None
     return _rtf_to_text(_decode_bytes(data), char_cap)

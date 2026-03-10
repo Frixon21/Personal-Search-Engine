@@ -18,15 +18,22 @@ class FileEntry:
     mtime: float
 
 
-SKIP_DIRS = {".git", "node_modules", "__pycache__"}
+DEFAULT_IGNORE_FOLDERS = {".git", "node_modules", "__pycache__"}
 INDEXABLE_EXTS = {
     ".txt", ".md", ".py", ".js", ".ts", ".json", ".yaml", ".yml", ".csv", ".log",
     ".pdf", ".doc", ".docx", ".rtf", ".odt", ".tex", ".html", ".htm",
     ".xls", ".xlsx", ".ppt", ".pptx",
 }
+DEFAULT_ALLOWED_EXTS = frozenset(INDEXABLE_EXTS)
+SKIP_DIRS = set(DEFAULT_IGNORE_FOLDERS)
 
 INDEX_DB_NAME = ".pse_index.sqlite3"
+INDEX_CONFIG_NAME = "pse_index.toml"
+INDEX_LOG_DIR_NAME = ".pse_index_logs"
+INDEX_RUN_JSONL_NAME = "index_runs.jsonl"
+INDEX_RUN_TEXT_NAME = "index_runs.log"
 INDEX_SCHEMA_VERSION = 2
+DEFAULT_MAX_BYTES = 2_000_000
 PREVIEW_CHAR_CAP = 10_000
 
 
@@ -43,6 +50,22 @@ WEEKDAY_MAP = {
 
 def db_path_for_root(root: Path) -> Path:
     return root.expanduser().resolve() / INDEX_DB_NAME
+
+
+def index_config_path_for_root(root: Path) -> Path:
+    return root.expanduser().resolve() / INDEX_CONFIG_NAME
+
+
+def index_log_dir_for_root(root: Path) -> Path:
+    return root.expanduser().resolve() / INDEX_LOG_DIR_NAME
+
+
+def index_jsonl_log_path_for_root(root: Path) -> Path:
+    return index_log_dir_for_root(root) / INDEX_RUN_JSONL_NAME
+
+
+def index_text_log_path_for_root(root: Path) -> Path:
+    return index_log_dir_for_root(root) / INDEX_RUN_TEXT_NAME
 
 
 def index_db_artifact_paths(db_path: Path) -> List[Path]:
@@ -147,16 +170,37 @@ def tokenize(s: str) -> List[str]:
     return out
 
 
-def iter_files(roots: Iterable[Path]) -> Iterable[FileEntry]:
+def _normalize_name_set(names: Optional[Iterable[str]]) -> set[str]:
+    out: set[str] = set()
+    if not names:
+        return out
+
+    for name in names:
+        text = str(name).strip()
+        if text:
+            out.add(text.casefold())
+    return out
+
+
+def iter_files(
+    roots: Iterable[Path],
+    ignore_folders: Optional[Iterable[str]] = None,
+    internal_ignore_dirs: Optional[Iterable[str]] = None,
+) -> Iterable[FileEntry]:
+    ignored_dirs = _normalize_name_set(
+        DEFAULT_IGNORE_FOLDERS if ignore_folders is None else ignore_folders
+    )
+    ignored_dirs.update(_normalize_name_set(internal_ignore_dirs))
+
     for root in roots:
         root = root.expanduser().resolve()
         if not root.exists():
             continue
 
         for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+            dirnames[:] = sorted(d for d in dirnames if d.casefold() not in ignored_dirs)
 
-            for fn in filenames:
+            for fn in sorted(filenames):
                 # Skip our own index database artifacts (db/wal/shm)
                 if fn.startswith(INDEX_DB_NAME):
                     continue
