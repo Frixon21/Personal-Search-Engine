@@ -1,6 +1,8 @@
 import sqlite3
 import time
 from dataclasses import dataclass
+import os
+import re
 from typing import List, Optional, Protocol, Sequence
 
 import numpy as np
@@ -8,8 +10,10 @@ import numpy as np
 
 SEMANTIC_BACKEND = "sentence-transformers"
 SEMANTIC_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-SEMANTIC_CHUNK_CHARS = 800
-SEMANTIC_CHUNK_OVERLAP = 120
+SEMANTIC_RERANK_MODEL_NAME = "BAAI/bge-reranker-v2-m3"
+SEMANTIC_CHUNK_CHARS = 256
+SEMANTIC_CHUNK_OVERLAP = 64
+SEMANTIC_CHUNK_STRATEGY = "structured-v3"
 SEMANTIC_SCAN_BATCH_SIZE = 256
 
 
@@ -32,6 +36,16 @@ class SupportsSentenceEmbedding(Protocol):
         ...
 
 
+class SupportsCrossEncoder(Protocol):
+    def predict(
+        self,
+        sentences: Sequence[tuple[str, str]],
+        *,
+        show_progress_bar: bool = False,
+    ) -> np.ndarray:
+        ...
+
+
 @dataclass(frozen=True)
 class SemanticIndexMeta:
     backend: str
@@ -39,6 +53,7 @@ class SemanticIndexMeta:
     embedding_dim: int
     chunk_chars: int
     chunk_overlap: int
+    chunk_strategy: str
 
 
 @dataclass(frozen=True)
@@ -49,13 +64,42 @@ class TextChunk:
     text: str
 
 
+@dataclass(frozen=True)
+class TextSpan:
+    start_char: int
+    end_char: int
+    text: str
+
+
 _EMBEDDER: Optional[SupportsSentenceEmbedding] = None
+_RERANKER: Optional[SupportsCrossEncoder] = None
+
+
+def _configure_model_loading_verbosity() -> None:
+    os.environ.setdefault("HF_HUB_VERBOSITY", "error")
+    os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
+
+    try:
+        from huggingface_hub import logging as hf_logging
+
+        hf_logging.set_verbosity_error()
+    except Exception:
+        pass
+
+    try:
+        from transformers.utils import logging as transformers_logging
+
+        transformers_logging.set_verbosity_error()
+    except Exception:
+        pass
 
 
 def get_embedder() -> SupportsSentenceEmbedding:
     global _EMBEDDER
     if _EMBEDDER is not None:
         return _EMBEDDER
+
+    _configure_model_loading_verbosity()
 
     try:
         from sentence_transformers import SentenceTransformer
@@ -76,6 +120,35 @@ def get_embedder() -> SupportsSentenceEmbedding:
     return _EMBEDDER
 
 
+def get_reranker() -> SupportsCrossEncoder:
+    global _RERANKER
+    if _RERANKER is not None:
+        return _RERANKER
+
+    _configure_model_loading_verbosity()
+
+    try:
+        from sentence_transformers import CrossEncoder
+    except Exception as exc:
+        raise SemanticSetupError(
+            "Semantic reranking requires 'sentence-transformers' with a working PyTorch install. "
+            "Install the dependency, then rerun search."
+        ) from exc
+
+    try:
+        _RERANKER = CrossEncoder(
+            SEMANTIC_RERANK_MODEL_NAME,
+            trust_remote_code=True,
+        )
+    except Exception as exc:
+        raise SemanticSetupError(
+            f"Unable to load the semantic reranker model '{SEMANTIC_RERANK_MODEL_NAME}'. "
+            "The first run may need internet access to download and cache the model."
+        ) from exc
+
+    return _RERANKER
+
+
 def build_index_meta(embedder: Optional[SupportsSentenceEmbedding] = None) -> SemanticIndexMeta:
     if embedder is None:
         embedder = get_embedder()
@@ -86,6 +159,7 @@ def build_index_meta(embedder: Optional[SupportsSentenceEmbedding] = None) -> Se
         embedding_dim=int(embedder.get_sentence_embedding_dimension()),
         chunk_chars=SEMANTIC_CHUNK_CHARS,
         chunk_overlap=SEMANTIC_CHUNK_OVERLAP,
+        chunk_strategy=SEMANTIC_CHUNK_STRATEGY,
     )
 
 
@@ -116,6 +190,184 @@ def _find_chunk_end(text: str, start: int, target_chars: int) -> int:
     return hard_limit
 
 
+def _word_count(text: str) -> int:
+    return len(re.findall(r"[A-Za-z0-9]+", text))
+
+
+def _is_bullet_line(text: str) -> bool:
+    stripped = text.lstrip()
+    return bool(re.match(r"(?:[-*•]\s+|\d+[.)]\s+)", stripped))
+
+
+def _is_heading_line(text: str) -> bool:
+    stripped = text.strip()
+    return stripped.endswith(":") and _word_count(stripped) <= 4
+
+
+def _iter_nonempty_line_blocks(text: str) -> List[List[TextSpan]]:
+    blocks: List[List[TextSpan]] = []
+    current: List[TextSpan] = []
+    cursor = 0
+
+    for raw_line in text.splitlines(keepends=True):
+        line_text = raw_line.rstrip("\r\n")
+        if not line_text.strip():
+            if current:
+                blocks.append(current)
+                current = []
+            cursor += len(raw_line)
+            continue
+
+        leading = len(line_text) - len(line_text.lstrip())
+        trailing = len(line_text.rstrip())
+        start = cursor + leading
+        end = cursor + trailing
+        current.append(TextSpan(start, end, text[start:end]))
+        cursor += len(raw_line)
+
+    if cursor < len(text):
+        remainder = text[cursor:]
+        if remainder.strip():
+            leading = len(remainder) - len(remainder.lstrip())
+            trailing = len(remainder.rstrip())
+            start = cursor + leading
+            end = cursor + trailing
+            current.append(TextSpan(start, end, text[start:end]))
+
+    if current:
+        blocks.append(current)
+
+    return blocks
+
+
+def _sentence_spans(span: TextSpan) -> List[TextSpan]:
+    out: List[TextSpan] = []
+    for match in re.finditer(r".+?(?:[.!?](?=\s|$)|$)", span.text, flags=re.DOTALL):
+        rel_start, rel_end = match.span()
+        start, end = _trim_bounds(span.text, rel_start, rel_end)
+        if end <= start:
+            continue
+        abs_start = span.start_char + start
+        abs_end = span.start_char + end
+        out.append(TextSpan(abs_start, abs_end, span.text[start:end]))
+    return out
+
+
+def _split_long_span(
+    span: TextSpan,
+    *,
+    chunk_chars: int,
+    chunk_overlap: int,
+) -> List[TextSpan]:
+    out: List[TextSpan] = []
+    rel_start = 0
+    text_len = len(span.text)
+
+    while rel_start < text_len:
+        rel_end = _find_chunk_end(span.text, rel_start, chunk_chars)
+        trimmed_start, trimmed_end = _trim_bounds(span.text, rel_start, rel_end)
+        if trimmed_end > trimmed_start:
+            abs_start = span.start_char + trimmed_start
+            abs_end = span.start_char + trimmed_end
+            out.append(TextSpan(abs_start, abs_end, span.text[trimmed_start:trimmed_end]))
+
+        if rel_end >= text_len:
+            break
+
+        next_start = max(rel_start + 1, rel_end - chunk_overlap)
+        if next_start <= rel_start:
+            next_start = rel_end
+        rel_start = next_start
+
+    return out
+
+
+def _merge_heading_spans(text: str, spans: List[TextSpan], chunk_chars: int) -> List[TextSpan]:
+    merged: List[TextSpan] = []
+    idx = 0
+    while idx < len(spans):
+        current = spans[idx]
+        if (
+            idx + 1 < len(spans)
+            and _is_heading_line(current.text)
+            and (spans[idx + 1].end_char - current.start_char) <= chunk_chars
+        ):
+            nxt = spans[idx + 1]
+            merged.append(TextSpan(current.start_char, nxt.end_char, text[current.start_char:nxt.end_char]))
+            idx += 2
+            continue
+
+        merged.append(current)
+        idx += 1
+
+    return merged
+
+
+def _block_to_spans(
+    text: str,
+    block: List[TextSpan],
+    *,
+    chunk_chars: int,
+    chunk_overlap: int,
+) -> List[TextSpan]:
+    if not block:
+        return []
+
+    if len(block) == 1:
+        paragraph = block[0]
+        spans = _sentence_spans(paragraph) or [paragraph]
+    elif any(_is_bullet_line(line.text) for line in block):
+        spans = [
+            TextSpan(
+                block[0].start_char,
+                block[-1].end_char,
+                text[block[0].start_char:block[-1].end_char],
+            )
+        ]
+    elif all(line.text.rstrip().endswith((".", "!", "?", ":")) for line in block):
+        spans = block
+    else:
+        paragraph = TextSpan(block[0].start_char, block[-1].end_char, text[block[0].start_char:block[-1].end_char])
+        spans = _sentence_spans(paragraph) or [paragraph]
+
+    out: List[TextSpan] = []
+    for span in spans:
+        if len(span.text) > chunk_chars:
+            out.extend(_split_long_span(span, chunk_chars=chunk_chars, chunk_overlap=chunk_overlap))
+        else:
+            out.append(span)
+    return out
+
+
+def _span_contains_list(text: str) -> bool:
+    return any(_is_bullet_line(line) for line in text.splitlines())
+
+
+def _merge_adjacent_context_spans(text: str, spans: List[TextSpan], chunk_chars: int) -> List[TextSpan]:
+    if len(spans) < 2:
+        return spans
+
+    merged: List[TextSpan] = []
+    idx = 0
+    while idx < len(spans):
+        current = spans[idx]
+        if (
+            idx + 1 < len(spans)
+            and _span_contains_list(current.text)
+            and not _span_contains_list(spans[idx + 1].text)
+            and (spans[idx + 1].end_char - current.start_char) <= chunk_chars
+        ):
+            nxt = spans[idx + 1]
+            merged.append(TextSpan(current.start_char, nxt.end_char, text[current.start_char:nxt.end_char]))
+            idx += 2
+            continue
+
+        merged.append(current)
+        idx += 1
+
+    return merged
+
+
 def chunk_text(
     text: str,
     *,
@@ -125,35 +377,31 @@ def chunk_text(
     if not text:
         return []
 
-    out: List[TextChunk] = []
-    start = 0
-    chunk_index = 0
-    text_len = len(text)
-
-    while start < text_len:
-        end = _find_chunk_end(text, start, chunk_chars)
-        trimmed_start, trimmed_end = _trim_bounds(text, start, end)
-
-        if trimmed_end > trimmed_start:
-            out.append(
-                TextChunk(
-                    chunk_index=chunk_index,
-                    start_char=trimmed_start,
-                    end_char=trimmed_end,
-                    text=text[trimmed_start:trimmed_end],
-                )
+    spans: List[TextSpan] = []
+    for block in _iter_nonempty_line_blocks(text):
+        spans.extend(
+            _block_to_spans(
+                text,
+                block,
+                chunk_chars=chunk_chars,
+                chunk_overlap=chunk_overlap,
             )
-            chunk_index += 1
+        )
 
-        if end >= text_len:
-            break
+    if not spans:
+        return []
 
-        next_start = max(start + 1, end - chunk_overlap)
-        if next_start <= start:
-            next_start = end
-        start = next_start
+    spans = _merge_adjacent_context_spans(text, spans, chunk_chars)
 
-    return out
+    return [
+        TextChunk(
+            chunk_index=idx,
+            start_char=span.start_char,
+            end_char=span.end_char,
+            text=span.text,
+        )
+        for idx, span in enumerate(spans)
+    ]
 
 def encode_texts(
     texts: Sequence[str],
@@ -193,6 +441,31 @@ def encode_query(
     return encode_texts([query_text], embedder=embedder)[0]
 
 
+def rerank_texts(
+    query_text: str,
+    texts: Sequence[str],
+    *,
+    reranker: Optional[SupportsCrossEncoder] = None,
+) -> np.ndarray:
+    if not texts:
+        return np.empty((0,), dtype=np.float32)
+
+    if reranker is None:
+        reranker = get_reranker()
+
+    pairs = [(query_text, text) for text in texts]
+    scores = np.asarray(
+        reranker.predict(
+            pairs,
+            show_progress_bar=False,
+        ),
+        dtype=np.float32,
+    )
+    if scores.ndim != 1:
+        scores = scores.reshape(-1)
+    return scores
+
+
 def vector_to_blob(vector: np.ndarray) -> bytes:
     arr = np.asarray(vector, dtype=np.float32)
     if arr.ndim != 1:
@@ -212,7 +485,7 @@ def dot_similarity(query_vector: np.ndarray, candidate_vector: np.ndarray) -> fl
     return float(np.dot(query_vector, candidate_vector))
 
 
-def semantic_meta_row(meta: SemanticIndexMeta) -> tuple[int, str, str, int, int, int, float]:
+def semantic_meta_row(meta: SemanticIndexMeta) -> tuple[int, str, str, int, int, int, str, float]:
     return (
         1,
         meta.backend,
@@ -220,6 +493,7 @@ def semantic_meta_row(meta: SemanticIndexMeta) -> tuple[int, str, str, int, int,
         meta.embedding_dim,
         meta.chunk_chars,
         meta.chunk_overlap,
+        meta.chunk_strategy,
         time.time(),
     )
 
@@ -228,7 +502,7 @@ def fetch_semantic_meta(conn: sqlite3.Connection) -> Optional[SemanticIndexMeta]
     try:
         row = conn.execute(
             """
-            SELECT backend, model_name, embedding_dim, chunk_chars, chunk_overlap
+            SELECT backend, model_name, embedding_dim, chunk_chars, chunk_overlap, chunk_strategy
             FROM semantic_meta
             WHERE singleton = 1
             """
@@ -245,4 +519,5 @@ def fetch_semantic_meta(conn: sqlite3.Connection) -> Optional[SemanticIndexMeta]
         embedding_dim=int(row[2]),
         chunk_chars=int(row[3]),
         chunk_overlap=int(row[4]),
+        chunk_strategy=str(row[5]),
     )

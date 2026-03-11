@@ -178,6 +178,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
             embedding_dim INTEGER NOT NULL,
             chunk_chars INTEGER NOT NULL,
             chunk_overlap INTEGER NOT NULL,
+            chunk_strategy TEXT NOT NULL,
             updated_at REAL NOT NULL
         );
 
@@ -311,15 +312,17 @@ def replace_semantic_meta(conn: sqlite3.Connection, meta: SemanticIndexMeta) -> 
             embedding_dim,
             chunk_chars,
             chunk_overlap,
+            chunk_strategy,
             updated_at
         )
-        VALUES(?, ?, ?, ?, ?, ?, ?)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(singleton) DO UPDATE SET
             backend=excluded.backend,
             model_name=excluded.model_name,
             embedding_dim=excluded.embedding_dim,
             chunk_chars=excluded.chunk_chars,
             chunk_overlap=excluded.chunk_overlap,
+            chunk_strategy=excluded.chunk_strategy,
             updated_at=excluded.updated_at
         """,
         semantic_meta_row(meta),

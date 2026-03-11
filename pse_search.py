@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import re
 import sqlite3
 import time
@@ -23,11 +23,15 @@ from pse_semantic import (
     dot_similarity,
     encode_query,
     fetch_semantic_meta,
+    get_reranker,
+    rerank_texts,
 )
 
 
 SEARCH_DB_PRAGMAS = ("temp_store=MEMORY",)
-SEARCH_HELP_TEXT = """Usage: python pse_search.py <root_folder> "<query>" [max_results] [options]
+SEARCH_HELP_TEXT = """Usage:
+  python pse_search.py <root_folder> "<query>" [max_results] [options]
+  python pse_search.py <root_folder> [max_results] --interactive [options]
 
 Search the SQLite index for a root folder.
 
@@ -35,12 +39,14 @@ Arguments:
   <root_folder>   Folder that contains the .pse_index.sqlite3 index.
   <query>         Query text to search for. If you do not quote it, the remaining
                   non-option tokens are joined into a single query string.
+                  Not used in interactive mode.
   [max_results]   Optional positive integer result limit. Default: 20.
 
 Options:
   --lexical       Use keyword/content ranking only.
   --semantic      Use semantic retrieval only.
                   By default, search uses a combined lexical + semantic ranking.
+  --interactive   Start a simple query loop and reuse loaded models in one process.
   --debug         Print timings and scoring breakdowns. Also enables snippets.
   --snippets      Show cached snippet text for each result.
   -h, --help      Show this help message and exit.
@@ -50,6 +56,11 @@ HYBRID_LEXICAL_WEIGHT = 1.0
 HYBRID_SEMANTIC_WEIGHT = 1.0
 HYBRID_METADATA_WEIGHT = 0.20
 HYBRID_RECENCY_WEIGHT = 0.10
+SEMANTIC_MULTI_LINE_LIST_MULTIPLIER = 0.95
+SEMANTIC_SINGLE_BULLET_MULTIPLIER = 0.80
+SEMANTIC_HEADING_MULTIPLIER = 0.85
+SEMANTIC_RERANK_TOP_K = 10
+SEMANTIC_RERANK_CHAR_CAP = 2_000
 
 
 @dataclass(frozen=True)
@@ -79,6 +90,11 @@ class SemanticRankedDoc:
     preview_text: Optional[str]
     chunk_text: str
     similarity: float
+    structure_multiplier: float
+    base_score: float
+    rerank_raw: Optional[float]
+    rerank_bonus: float
+    score: float
     debug: Tuple[int, int, int, int]
 
 
@@ -94,10 +110,15 @@ class HybridRankedDoc:
     lexical_norm: float
     semantic_raw: float
     semantic_norm: float
+    semantic_similarity: float
+    semantic_structure_multiplier: float
+    rerank_raw: Optional[float]
+    rerank_bonus: float
     fn_hits: int
     fn_sub: int
     meta: int
     rec: int
+    base_total: float
     total: float
 
 
@@ -281,6 +302,18 @@ def normalize_scores(raw_scores: Dict[int, float]) -> Dict[int, float]:
     }
 
 
+def normalize_rerank_scores(raw_scores: List[float]) -> List[float]:
+    if not raw_scores:
+        return []
+
+    low = min(raw_scores)
+    high = max(raw_scores)
+    if high == low:
+        return [0.0 for _ in raw_scores]
+
+    return [(score - low) / (high - low) for score in raw_scores]
+
+
 def hybrid_bonus(meta: int, rec: int) -> float:
     meta_norm = meta / 3.0 if meta > 0 else 0.0
     rec_norm = rec / 3.0 if rec > 0 else 0.0
@@ -288,6 +321,121 @@ def hybrid_bonus(meta: int, rec: int) -> float:
         meta_norm * HYBRID_METADATA_WEIGHT +
         rec_norm * HYBRID_RECENCY_WEIGHT
     )
+
+
+def semantic_rerank_text(path: str, chunk_text: Optional[str], preview_text: Optional[str]) -> str:
+    stem = Path(path).stem
+    for value in (preview_text, chunk_text):
+        if value and value.strip():
+            text = value.strip()
+            if len(text) > SEMANTIC_RERANK_CHAR_CAP:
+                text = text[:SEMANTIC_RERANK_CHAR_CAP]
+            return f"{stem}\n\n{text}"
+    return stem
+
+
+def rerank_top_semantic_docs(
+    query_str: str,
+    ranked: List[SemanticRankedDoc],
+    *,
+    top_k: int = SEMANTIC_RERANK_TOP_K,
+) -> List[SemanticRankedDoc]:
+    if len(ranked) < 2:
+        return ranked
+
+    top_docs = ranked[:top_k]
+    texts = [semantic_rerank_text(doc.path, doc.chunk_text, doc.preview_text) for doc in top_docs]
+
+    try:
+        raw_scores = [float(score) for score in rerank_texts(query_str, texts)]
+    except SemanticSetupError:
+        return ranked
+
+    bonuses = normalize_rerank_scores(raw_scores)
+    reranked = [
+        replace(
+            doc,
+            rerank_raw=raw,
+            rerank_bonus=bonus,
+            score=doc.base_score + bonus,
+        )
+        for doc, raw, bonus in zip(top_docs, raw_scores, bonuses)
+    ]
+    reranked.sort(
+        key=lambda doc: (
+            doc.score,
+            float("-inf") if doc.rerank_raw is None else doc.rerank_raw,
+            doc.base_score,
+            doc.similarity,
+            doc.mtime,
+        ),
+        reverse=True,
+    )
+    return reranked + ranked[top_k:]
+
+
+def rerank_top_hybrid_docs(
+    query_str: str,
+    ranked: List[HybridRankedDoc],
+    *,
+    top_k: int = SEMANTIC_RERANK_TOP_K,
+) -> List[HybridRankedDoc]:
+    if len(ranked) < 2:
+        return ranked
+
+    top_docs = ranked[:top_k]
+    texts = [semantic_rerank_text(doc.path, doc.chunk_text, doc.preview_text) for doc in top_docs]
+
+    try:
+        raw_scores = [float(score) for score in rerank_texts(query_str, texts)]
+    except SemanticSetupError:
+        return ranked
+
+    bonuses = normalize_rerank_scores(raw_scores)
+    reranked = [
+        replace(
+            doc,
+            rerank_raw=raw,
+            rerank_bonus=bonus,
+            total=doc.base_total + bonus,
+        )
+        for doc, raw, bonus in zip(top_docs, raw_scores, bonuses)
+    ]
+    reranked.sort(
+        key=lambda doc: (
+            doc.total,
+            float("-inf") if doc.rerank_raw is None else doc.rerank_raw,
+            doc.base_total,
+            doc.semantic_norm,
+            doc.lexical_norm,
+            doc.mtime,
+        ),
+        reverse=True,
+    )
+    return reranked + ranked[top_k:]
+
+
+def semantic_structure_multiplier(chunk_text: str) -> float:
+    folded = fold_text(chunk_text).strip()
+    if not folded:
+        return 0.0
+
+    lines = [line.strip() for line in folded.splitlines() if line.strip()]
+    if not lines:
+        return 1.0
+
+    bullet_lines = [
+        line for line in lines
+        if re.match(r"^(?:[-*•]\s+|\d+[.)]\s+)", line)
+    ]
+    if bullet_lines and len(lines) >= 3:
+        return SEMANTIC_MULTI_LINE_LIST_MULTIPLIER
+    if len(lines) == 1 and bullet_lines:
+        return SEMANTIC_SINGLE_BULLET_MULTIPLIER
+    if len(lines) == 1 and lines[0].endswith(":") and len(tokenize(lines[0])) <= 6:
+        return SEMANTIC_HEADING_MULTIPLIER
+
+    return 1.0
 
 
 def validate_search_db(root: Path) -> Optional[Path]:
@@ -373,6 +521,8 @@ def build_semantic_ranked_docs(
         fn_hits, fn_sub, _fn_pos = score_filename(query_str, name, ext)
         meta = metadata_bonus(query_str, mtime)
         rec = recency_bonus(mtime)
+        structure_multiplier = semantic_structure_multiplier(hit.chunk_text)
+        score = hit.similarity * structure_multiplier
 
         ranked.append(
             SemanticRankedDoc(
@@ -383,12 +533,17 @@ def build_semantic_ranked_docs(
                 preview_text=preview_text,
                 chunk_text=hit.chunk_text,
                 similarity=hit.similarity,
+                structure_multiplier=structure_multiplier,
+                base_score=score,
+                rerank_raw=None,
+                rerank_bonus=0.0,
+                score=score,
                 debug=(fn_hits, fn_sub, meta, rec),
             )
         )
 
     ranked.sort(
-        key=lambda doc: (doc.similarity, doc.debug[1], doc.debug[0], doc.debug[2], doc.debug[3]),
+        key=lambda doc: (doc.score, doc.similarity, doc.debug[1], doc.debug[0], doc.debug[2], doc.debug[3]),
         reverse=True,
     )
     return q_terms, ranked
@@ -408,7 +563,7 @@ def build_hybrid_ranked_docs(
         doc.doc_id: float(lexical_evidence_score(doc.debug[0], doc.debug[1], doc.debug[2], doc.debug[3]))
         for doc in lexical_ranked
     }
-    semantic_raw = {doc.doc_id: doc.similarity for doc in semantic_ranked}
+    semantic_raw = {doc.doc_id: doc.score for doc in semantic_ranked}
 
     lexical_norm = normalize_scores(lexical_raw)
     semantic_norm = normalize_scores(semantic_raw)
@@ -424,9 +579,11 @@ def build_hybrid_ranked_docs(
         if lexical_doc is not None:
             _cu, _ct, fn_hits, fn_sub, meta, _fn_pos, rec = lexical_doc.debug
             preview_text = lexical_doc.preview_text
+            structure_multiplier = semantic_doc.structure_multiplier if semantic_doc is not None else 1.0
         else:
             fn_hits, fn_sub, meta, rec = semantic_doc.debug
             preview_text = semantic_doc.preview_text
+            structure_multiplier = semantic_doc.structure_multiplier
 
         total = (
             lexical_norm.get(doc_id, 0.0) * HYBRID_LEXICAL_WEIGHT +
@@ -446,10 +603,15 @@ def build_hybrid_ranked_docs(
                 lexical_norm=lexical_norm.get(doc_id, 0.0),
                 semantic_raw=semantic_raw.get(doc_id, 0.0),
                 semantic_norm=semantic_norm.get(doc_id, 0.0),
+                semantic_similarity=semantic_doc.similarity if semantic_doc is not None else 0.0,
+                semantic_structure_multiplier=structure_multiplier,
+                rerank_raw=None,
+                rerank_bonus=0.0,
                 fn_hits=fn_hits,
                 fn_sub=fn_sub,
                 meta=meta,
                 rec=rec,
+                base_total=total,
                 total=total,
             )
         )
@@ -519,12 +681,15 @@ def _keyword_result_line(doc: RankedDoc, q_terms: List[str], debug: bool) -> str
 
 def _semantic_result_line(doc: SemanticRankedDoc, _q_terms: List[str], debug: bool) -> str:
     if not debug:
-        return f"score={doc.similarity:.4f}"
+        return f"score={doc.score:.4f}"
 
     fn_hits, fn_sub, meta, rec = doc.debug
+    rerank_raw = f"{doc.rerank_raw:.4f}" if doc.rerank_raw is not None else "-"
     return (
-        f"score={doc.similarity:.4f}  "
-        f"[semantic={doc.similarity:.4f} | fn={fn_hits} sub={fn_sub} meta={meta} rec={rec}]"
+        f"score={doc.score:.4f}  "
+        f"[semantic={doc.similarity:.4f} | structure={doc.structure_multiplier:.2f} | "
+        f"rerank={rerank_raw} bonus={doc.rerank_bonus:.4f} | "
+        f"fn={fn_hits} sub={fn_sub} meta={meta} rec={rec}]"
     )
 
 
@@ -532,10 +697,13 @@ def _hybrid_result_line(doc: HybridRankedDoc, _q_terms: List[str], debug: bool) 
     if not debug:
         return f"score={doc.total:.4f}"
 
+    rerank_raw = f"{doc.rerank_raw:.4f}" if doc.rerank_raw is not None else "-"
     return (
         f"score={doc.total:.4f}  "
         f"[lex={doc.lexical_norm:.4f} raw={doc.lexical_raw:.1f} | "
-        f"sem={doc.semantic_norm:.4f} raw={doc.semantic_raw:.4f} | "
+        f"sem={doc.semantic_norm:.4f} raw={doc.semantic_raw:.4f} "
+        f"(base={doc.semantic_similarity:.4f} structure={doc.semantic_structure_multiplier:.2f}) | "
+        f"rerank={rerank_raw} bonus={doc.rerank_bonus:.4f} | "
         f"meta={doc.meta} rec={doc.rec}]"
     )
 
@@ -566,6 +734,7 @@ def _run_ranked_query(
     legend_lines: Tuple[str, ...],
     score_line: Callable[[Any, List[str], bool], str],
     snippet_builder: Callable[[Any, List[str]], Optional[List[str]]],
+    rerank_ranked: Optional[Callable[[str, List[Any]], List[Any]]] = None,
     require_semantic: bool = False,
 ) -> None:
     dbp = validate_search_db(root)
@@ -581,6 +750,8 @@ def _run_ranked_query(
 
         t0 = time.perf_counter()
         q_terms, ranked = build_ranked(conn, query_str)
+        if rerank_ranked is not None:
+            ranked = rerank_ranked(query_str, ranked)
         query_time = time.perf_counter() - t0
 
         if debug:
@@ -660,6 +831,8 @@ def query_semantic(
         build_ranked=build_semantic_ranked_docs,
         legend_lines=(
             "semantic     -> best chunk cosine similarity for the document",
+            "structure    -> confidence multiplier based on chunk structure",
+            f"rerank       -> normalized cross-encoder bonus over top {SEMANTIC_RERANK_TOP_K}",
             "fn           -> filename token matches",
             "sub          -> full query substring in filename (0/1)",
             "meta         -> date/weekday intent bonus",
@@ -667,6 +840,7 @@ def query_semantic(
         ),
         score_line=_semantic_result_line,
         snippet_builder=_semantic_snippet,
+        rerank_ranked=rerank_top_semantic_docs,
         require_semantic=True,
     )
 
@@ -732,13 +906,90 @@ def query_combined(
         legend_lines=(
             "lex          -> normalized keyword/content score (0..1)",
             "sem          -> normalized best chunk cosine similarity (0..1)",
+            f"rerank       -> normalized cross-encoder bonus over top {SEMANTIC_RERANK_TOP_K}",
             "meta         -> date/weekday intent bonus (0..3)",
             "rec          -> recency bonus (3<1d, 2<7d, 1<30d, 0>=30d)",
         ),
         score_line=_hybrid_result_line,
         snippet_builder=_hybrid_snippet,
+        rerank_ranked=rerank_top_hybrid_docs,
         require_semantic=True,
     )
+
+
+def prepare_interactive_session(root: Path, *, lexical: bool = False) -> bool:
+    dbp = validate_search_db(root)
+    if dbp is None:
+        return False
+
+    if lexical:
+        return True
+
+    conn = open_db_connection(dbp, SEARCH_DB_PRAGMAS)
+    try:
+        if not ensure_semantic_ready(conn, dbp):
+            return False
+    finally:
+        conn.close()
+
+    try:
+        get_reranker()
+    except SemanticSetupError as exc:
+        print(str(exc))
+        return False
+
+    return True
+
+
+def interactive_session(
+    root: Path,
+    *,
+    max_results: int = 20,
+    debug: bool = False,
+    show_snippets: bool = False,
+    semantic: bool = False,
+    lexical: bool = False,
+) -> None:
+    if semantic and lexical:
+        raise ValueError("Cannot enable both semantic-only and lexical-only search modes.")
+
+    root = root.expanduser().resolve()
+    if not prepare_interactive_session(root, lexical=lexical):
+        return
+
+    mode = "semantic" if semantic else "lexical" if lexical else "hybrid"
+    print(f"Interactive search ready: {root}")
+    print(f"Mode: {mode} | max_results={max_results}")
+    print("Enter a query. Commands: :help, :quit")
+
+    while True:
+        try:
+            raw = input("pse> ").strip()
+        except EOFError:
+            print()
+            break
+        except KeyboardInterrupt:
+            print()
+            break
+
+        if not raw:
+            continue
+        if raw in {":q", ":quit", ":exit"}:
+            break
+        if raw == ":help":
+            print("Enter a query to search the current root.")
+            print("Commands: :help, :quit")
+            continue
+
+        query(
+            root,
+            raw,
+            max_results=max_results,
+            debug=debug,
+            show_snippets=show_snippets,
+            semantic=semantic,
+            lexical=lexical,
+        )
 
 
 def main() -> None:
@@ -749,7 +1000,7 @@ def main() -> None:
         print(SEARCH_HELP_TEXT)
         raise SystemExit(0)
 
-    known_flags = {"--debug", "--snippets", "--semantic", "--lexical"}
+    known_flags = {"--debug", "--snippets", "--semantic", "--lexical", "--interactive"}
     unknown_flags = [arg for arg in args if arg.startswith("-") and arg not in known_flags]
     if unknown_flags:
         print(f"Unknown option: {unknown_flags[0]}")
@@ -757,15 +1008,11 @@ def main() -> None:
         print(SEARCH_HELP_TEXT)
         raise SystemExit(1)
 
-    # pse_search.py <root> "<query>" [max_results] [--semantic|--lexical] [--debug] [--snippets]
-    if len(args) < 2:
-        print(SEARCH_HELP_TEXT)
-        raise SystemExit(1)
-
     debug = False
     show_snippets = False
     semantic = False
     lexical = False
+    interactive = False
     if "--debug" in args:
         debug = True
         args = [a for a in args if a != "--debug"]
@@ -778,6 +1025,9 @@ def main() -> None:
     if "--lexical" in args:
         lexical = True
         args = [a for a in args if a != "--lexical"]
+    if "--interactive" in args:
+        interactive = True
+        args = [a for a in args if a != "--interactive"]
 
     if semantic and lexical:
         print("Cannot use --semantic and --lexical together.")
@@ -785,7 +1035,33 @@ def main() -> None:
         print(SEARCH_HELP_TEXT)
         raise SystemExit(1)
 
+    if interactive:
+        if len(args) < 1:
+            print(SEARCH_HELP_TEXT)
+            raise SystemExit(1)
+    elif len(args) < 2:
+        print(SEARCH_HELP_TEXT)
+        raise SystemExit(1)
+
     root = Path(args[0])
+    if interactive:
+        if len(args) > 2 or (len(args) == 2 and not args[1].isdigit()):
+            print("Interactive mode accepts <root_folder> and optional [max_results].")
+            print()
+            print(SEARCH_HELP_TEXT)
+            raise SystemExit(1)
+
+        max_results = int(args[1]) if len(args) == 2 else 20
+        interactive_session(
+            root,
+            max_results=max_results,
+            debug=debug,
+            show_snippets=show_snippets,
+            semantic=semantic,
+            lexical=lexical,
+        )
+        return
+
     # Remaining args: query tokens + maybe max_results
     if len(args) >= 3 and args[-1].isdigit():
         max_results = int(args[-1])
