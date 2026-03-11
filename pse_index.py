@@ -14,20 +14,26 @@ from pse_common import (
     INDEXABLE_EXTS,
     INDEX_CONFIG_NAME,
     INDEX_LOG_DIR_NAME,
-    INDEX_SCHEMA_VERSION,
     PREVIEW_CHAR_CAP,
     db_path_for_root,
-    get_index_schema_version,
     index_config_path_for_root,
     index_jsonl_log_path_for_root,
     index_text_log_path_for_root,
     iter_files,
     open_db_connection,
     reset_index_db,
-    set_index_schema_version,
     tokenize,
 )
 from pse_extract import extract_text, supports_partial_byte_cap
+from pse_semantic import (
+    SemanticIndexMeta,
+    build_index_meta,
+    chunk_text,
+    encode_texts,
+    fetch_semantic_meta,
+    semantic_meta_row,
+    vector_to_blob,
+)
 
 
 # Shared extractor keeps indexing and snippet behavior aligned.
@@ -42,6 +48,22 @@ RUN_SAMPLE_LIMIT = 10
 SUCCESS_STATUS = "success"
 ABORTED_STATUS = "aborted"
 CONFIG_KEYS = {"allowed_extensions", "max_bytes", "ignore_folders"}
+INDEX_HELP_TEXT = """Usage: python pse_index.py index <root_folder> [options]
+
+Build or refresh the SQLite index for a root folder.
+
+Arguments:
+  index           Command that runs indexing.
+  <root_folder>   Folder to scan and index.
+
+Options:
+  -h, --help      Show this help message and exit.
+
+Behavior:
+  - Creates or updates .pse_index.sqlite3 in the root folder.
+  - Reads pse_index.toml from the root folder when present.
+  - Writes run logs under .pse_index_logs.
+"""
 
 
 @dataclass(frozen=True)
@@ -149,11 +171,32 @@ def init_schema(conn: sqlite3.Connection) -> None:
             FOREIGN KEY(doc_id) REFERENCES docs(doc_id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS semantic_meta (
+            singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+            backend TEXT NOT NULL,
+            model_name TEXT NOT NULL,
+            embedding_dim INTEGER NOT NULL,
+            chunk_chars INTEGER NOT NULL,
+            chunk_overlap INTEGER NOT NULL,
+            updated_at REAL NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS doc_chunks (
+            doc_id INTEGER NOT NULL,
+            chunk_index INTEGER NOT NULL,
+            start_char INTEGER NOT NULL,
+            end_char INTEGER NOT NULL,
+            chunk_text TEXT NOT NULL,
+            embedding BLOB NOT NULL,
+            PRIMARY KEY(doc_id, chunk_index),
+            FOREIGN KEY(doc_id) REFERENCES docs(doc_id) ON DELETE CASCADE
+        );
+
         CREATE INDEX IF NOT EXISTS idx_terms_term ON terms(term);
         CREATE INDEX IF NOT EXISTS idx_terms_doc  ON terms(doc_id);
+        CREATE INDEX IF NOT EXISTS idx_doc_chunks_doc ON doc_chunks(doc_id);
         """
     )
-    set_index_schema_version(conn)
     conn.commit()
 
 
@@ -216,9 +259,71 @@ def replace_preview_for_doc(conn: sqlite3.Connection, doc_id: int, preview_text:
     conn.execute("DELETE FROM doc_previews WHERE doc_id = ?", (doc_id,))
 
 
+def replace_chunks_for_doc(
+    conn: sqlite3.Connection,
+    doc_id: int,
+    text: Optional[str],
+) -> None:
+    conn.execute("DELETE FROM doc_chunks WHERE doc_id = ?", (doc_id,))
+    if not text or not text.strip():
+        return
+
+    chunks = chunk_text(text)
+    if not chunks:
+        return
+
+    embeddings = encode_texts([chunk.text for chunk in chunks])
+    if len(chunks) != len(embeddings):
+        raise RuntimeError("Semantic chunk embedding count did not match chunk count")
+
+    conn.executemany(
+        """
+        INSERT INTO doc_chunks(doc_id, chunk_index, start_char, end_char, chunk_text, embedding)
+        VALUES(?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                doc_id,
+                chunk.chunk_index,
+                chunk.start_char,
+                chunk.end_char,
+                chunk.text,
+                vector_to_blob(vector),
+            )
+            for chunk, vector in zip(chunks, embeddings)
+        ],
+    )
+
+
 def clear_doc_content(conn: sqlite3.Connection, doc_id: int) -> None:
     replace_terms_for_doc(conn, doc_id, {})
     replace_preview_for_doc(conn, doc_id, None)
+    replace_chunks_for_doc(conn, doc_id, None)
+
+
+def replace_semantic_meta(conn: sqlite3.Connection, meta: SemanticIndexMeta) -> None:
+    conn.execute(
+        """
+        INSERT INTO semantic_meta(
+            singleton,
+            backend,
+            model_name,
+            embedding_dim,
+            chunk_chars,
+            chunk_overlap,
+            updated_at
+        )
+        VALUES(?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(singleton) DO UPDATE SET
+            backend=excluded.backend,
+            model_name=excluded.model_name,
+            embedding_dim=excluded.embedding_dim,
+            chunk_chars=excluded.chunk_chars,
+            chunk_overlap=excluded.chunk_overlap,
+            updated_at=excluded.updated_at
+        """,
+        semantic_meta_row(meta),
+    )
 
 
 def _timestamp_now() -> str:
@@ -264,16 +369,6 @@ def _normalize_list(value: object, field_name: str) -> list[object]:
     return value
 
 
-def _normalize_allowed_extensions(raw_value: object) -> frozenset[str]:
-    raw_list = _normalize_list(raw_value, "allowed_extensions")
-    return frozenset(_normalize_extension(value) for value in raw_list)
-
-
-def _normalize_ignore_folders(raw_value: object) -> frozenset[str]:
-    raw_list = _normalize_list(raw_value, "ignore_folders")
-    return frozenset(_normalize_folder_name(value) for value in raw_list)
-
-
 def _normalize_max_bytes(raw_value: object) -> int:
     if not isinstance(raw_value, int) or isinstance(raw_value, bool):
         raise ValueError("max_bytes must be an integer")
@@ -316,11 +411,13 @@ def load_index_config(root: Path) -> IndexConfig:
         raise ValueError(f"Unknown [index] keys in {INDEX_CONFIG_NAME}: {', '.join(unknown_keys)}")
 
     if "allowed_extensions" in raw_index:
-        allowed_extensions = _normalize_allowed_extensions(raw_index["allowed_extensions"])
+        raw_list = _normalize_list(raw_index["allowed_extensions"], "allowed_extensions")
+        allowed_extensions = frozenset(_normalize_extension(value) for value in raw_list)
     if "max_bytes" in raw_index:
         max_bytes = _normalize_max_bytes(raw_index["max_bytes"])
     if "ignore_folders" in raw_index:
-        ignore_folders = _normalize_ignore_folders(raw_index["ignore_folders"])
+        raw_list = _normalize_list(raw_index["ignore_folders"], "ignore_folders")
+        ignore_folders = frozenset(_normalize_folder_name(value) for value in raw_list)
 
     return IndexConfig(
         allowed_extensions=allowed_extensions,
@@ -346,11 +443,6 @@ def prune_out_of_scope_docs(
     if to_delete:
         conn.executemany("DELETE FROM docs WHERE doc_id = ?", to_delete)
     return len(to_delete)
-
-
-def _ensure_log_dir(root: Path) -> None:
-    index_jsonl_log_path_for_root(root).parent.mkdir(parents=True, exist_ok=True)
-
 
 def _format_text_log_block(stats: IndexRunStats) -> str:
     lines = [
@@ -403,23 +495,14 @@ def _format_text_log_block(stats: IndexRunStats) -> str:
 
 
 def append_run_logs(root: Path, stats: IndexRunStats) -> None:
-    _ensure_log_dir(root)
-
     jsonl_path = index_jsonl_log_path_for_root(root)
+    jsonl_path.parent.mkdir(parents=True, exist_ok=True)
     with jsonl_path.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(stats.to_log_record(), ensure_ascii=True, sort_keys=True) + "\n")
 
     text_path = index_text_log_path_for_root(root)
     with text_path.open("a", encoding="utf-8") as fh:
         fh.write(_format_text_log_block(stats))
-
-
-def _print_sample_block(title: str, samples: List[str]) -> None:
-    if not samples:
-        return
-    print(title)
-    for sample in samples:
-        print(f"  - {sample}")
 
 
 def print_run_summary(stats: IndexRunStats) -> None:
@@ -436,10 +519,17 @@ def print_run_summary(stats: IndexRunStats) -> None:
         f"size={stats.skipped_size:,}"
     )
     print(f"Time: {stats.duration_seconds:.2f}s")
-    _print_sample_block("Examples skipped by extension:", stats.not_indexable_samples)
-    _print_sample_block("Examples skipped by size:", stats.size_skipped_samples)
-    _print_sample_block("Examples failed to extract:", stats.failed_samples)
-    _print_sample_block("Examples pruned from index:", stats.removed_samples)
+    for title, samples in (
+        ("Examples skipped by extension:", stats.not_indexable_samples),
+        ("Examples skipped by size:", stats.size_skipped_samples),
+        ("Examples failed to extract:", stats.failed_samples),
+        ("Examples pruned from index:", stats.removed_samples),
+    ):
+        if not samples:
+            continue
+        print(title)
+        for sample in samples:
+            print(f"  - {sample}")
 
 
 def _build_aborted_stats(
@@ -475,24 +565,23 @@ def index_root(root: Path) -> IndexRunStats:
     started_perf = time.perf_counter()
     config: Optional[IndexConfig] = None
     conn: Optional[sqlite3.Connection] = None
+    semantic_meta: Optional[SemanticIndexMeta] = None
 
     try:
         config = load_index_config(root)
+        semantic_meta = build_index_meta()
 
-        existing_version = get_index_schema_version(dbp)
-        if dbp.exists() and existing_version > INDEX_SCHEMA_VERSION:
-            raise RuntimeError(
-                f"Index schema version {existing_version} is newer than this code supports "
-                f"({INDEX_SCHEMA_VERSION})."
-            )
+        if dbp.exists():
+            prior_conn = open_db_connection(dbp, ("foreign_keys=ON",))
+            try:
+                existing_meta = fetch_semantic_meta(prior_conn)
+            finally:
+                prior_conn.close()
 
-        if dbp.exists() and existing_version < INDEX_SCHEMA_VERSION:
-            print(f"Index DB: {dbp}")
-            print(
-                f"Schema upgrade detected ({existing_version} -> {INDEX_SCHEMA_VERSION}); "
-                "rebuilding index."
-            )
-            reset_index_db(dbp)
+            if existing_meta != semantic_meta:
+                print(f"Index DB: {dbp}")
+                print("Semantic configuration changed; rebuilding index.")
+                reset_index_db(dbp)
 
         stats = IndexRunStats(
             root=str(root),
@@ -503,6 +592,7 @@ def index_root(root: Path) -> IndexRunStats:
 
         conn = open_db_connection(dbp, INDEX_DB_PRAGMAS)
         init_schema(conn)
+        replace_semantic_meta(conn, semantic_meta)
 
         seen_paths: set[str] = set()
 
@@ -558,6 +648,7 @@ def index_root(root: Path) -> IndexRunStats:
                 counts = term_counts_from_text(text)
                 replace_terms_for_doc(conn, doc_id, counts)
                 replace_preview_for_doc(conn, doc_id, text[:PREVIEW_CHAR_CAP])
+                replace_chunks_for_doc(conn, doc_id, text)
                 stats.indexed += 1
 
         stats.removed = prune_out_of_scope_docs(conn, seen_paths, stats.removed_samples)
@@ -582,15 +673,26 @@ def index_root(root: Path) -> IndexRunStats:
         if conn is not None:
             conn.close()
 
-
 def main() -> None:
     import sys
 
-    if len(sys.argv) < 3 or sys.argv[1].lower() != "index":
-        print("Usage: python pse_index.py index <root_folder>")
+    args = sys.argv[1:]
+    if any(arg in {"-h", "--help"} for arg in args):
+        print(INDEX_HELP_TEXT)
+        raise SystemExit(0)
+
+    unknown_flags = [arg for arg in args if arg.startswith("-")]
+    if unknown_flags:
+        print(f"Unknown option: {unknown_flags[0]}")
+        print()
+        print(INDEX_HELP_TEXT)
         raise SystemExit(1)
 
-    root = Path(sys.argv[2])
+    if len(args) < 2 or args[0].lower() != "index":
+        print(INDEX_HELP_TEXT)
+        raise SystemExit(1)
+
+    root = Path(args[1])
     try:
         index_root(root)
     except Exception as exc:

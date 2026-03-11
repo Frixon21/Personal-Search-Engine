@@ -25,14 +25,12 @@ INDEXABLE_EXTS = {
     ".xls", ".xlsx", ".ppt", ".pptx",
 }
 DEFAULT_ALLOWED_EXTS = frozenset(INDEXABLE_EXTS)
-SKIP_DIRS = set(DEFAULT_IGNORE_FOLDERS)
 
 INDEX_DB_NAME = ".pse_index.sqlite3"
 INDEX_CONFIG_NAME = "pse_index.toml"
 INDEX_LOG_DIR_NAME = ".pse_index_logs"
 INDEX_RUN_JSONL_NAME = "index_runs.jsonl"
 INDEX_RUN_TEXT_NAME = "index_runs.log"
-INDEX_SCHEMA_VERSION = 2
 DEFAULT_MAX_BYTES = 2_000_000
 PREVIEW_CHAR_CAP = 10_000
 
@@ -76,30 +74,11 @@ def index_db_artifact_paths(db_path: Path) -> List[Path]:
     ]
 
 
-def get_index_schema_version(db_path: Path) -> int:
-    if not db_path.exists():
-        return 0
-
-    conn = sqlite3.connect(str(db_path))
-    try:
-        row = conn.execute("PRAGMA user_version").fetchone()
-    except sqlite3.Error:
-        return 0
-    finally:
-        conn.close()
-
-    return int(row[0]) if row else 0
-
-
 def open_db_connection(db_path: Path, pragmas: Iterable[str] = ()) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path))
     for pragma in pragmas:
         conn.execute(f"PRAGMA {pragma};")
     return conn
-
-
-def set_index_schema_version(conn: sqlite3.Connection) -> None:
-    conn.execute(f"PRAGMA user_version = {INDEX_SCHEMA_VERSION}")
 
 
 def reset_index_db(db_path: Path) -> None:
@@ -170,27 +149,22 @@ def tokenize(s: str) -> List[str]:
     return out
 
 
-def _normalize_name_set(names: Optional[Iterable[str]]) -> set[str]:
-    out: set[str] = set()
-    if not names:
-        return out
-
-    for name in names:
-        text = str(name).strip()
-        if text:
-            out.add(text.casefold())
-    return out
-
-
 def iter_files(
     roots: Iterable[Path],
     ignore_folders: Optional[Iterable[str]] = None,
     internal_ignore_dirs: Optional[Iterable[str]] = None,
 ) -> Iterable[FileEntry]:
-    ignored_dirs = _normalize_name_set(
-        DEFAULT_IGNORE_FOLDERS if ignore_folders is None else ignore_folders
-    )
-    ignored_dirs.update(_normalize_name_set(internal_ignore_dirs))
+    ignored_dirs: set[str] = set()
+    for names in (
+        DEFAULT_IGNORE_FOLDERS if ignore_folders is None else ignore_folders,
+        internal_ignore_dirs,
+    ):
+        if not names:
+            continue
+        for name in names:
+            text = str(name).strip()
+            if text:
+                ignored_dirs.add(text.casefold())
 
     for root in roots:
         root = root.expanduser().resolve()
