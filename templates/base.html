@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}Personal Search Engine{% endblock %}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Source+Serif+4:wght@600;700&display=swap" rel="stylesheet">
+    <script>
+        tailwind = {
+            config: {
+                theme: {
+                    extend: {
+                        fontFamily: {
+                            display: ["Source Serif 4", "serif"],
+                            sans: ["IBM Plex Sans", "sans-serif"],
+                        },
+                        colors: {
+                            shell: "#efe7db",
+                            ink: "#1f1b16",
+                        },
+                    },
+                },
+            },
+        };
+    </script>
+    <script src="https://cdn.tailwindcss.com?plugins=forms,typography"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+    <link rel="stylesheet" href="{{ url_for('static', path='styles.css') }}">
+</head>
+<body class="min-h-screen bg-shell text-ink antialiased">
+    <main class="page-shell mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+        {% block content %}{% endblock %}
+    </main>
+</body>
+</html>

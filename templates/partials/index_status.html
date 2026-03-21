@@ -1,0 +1,62 @@
+{% if index_result %}
+<div class="rounded-2xl border {% if index_result.success %}border-emerald-200 bg-emerald-50{% else %}border-rose-200 bg-rose-50{% endif %} p-5">
+    <p class="text-sm font-semibold uppercase tracking-[0.08em] {% if index_result.success %}text-emerald-800{% else %}text-rose-800{% endif %}">
+        {% if index_result.success %}Index complete{% else %}Indexing failed{% endif %}
+    </p>
+    <p class="mt-2 text-sm leading-6 {% if index_result.success %}text-emerald-900{% else %}text-rose-900{% endif %}">
+        {{ index_result.message }}
+    </p>
+
+    {% if index_result.stats %}
+    <div class="mt-4 grid gap-3 sm:grid-cols-2">
+        <div class="rounded-xl bg-white/80 p-4">
+            <p class="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Scanned</p>
+            <p class="mt-1 font-display text-2xl text-slate-900">{{ index_result.stats.scanned }}</p>
+        </div>
+        <div class="rounded-xl bg-white/80 p-4">
+            <p class="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Indexed</p>
+            <p class="mt-1 font-display text-2xl text-slate-900">{{ index_result.stats.indexed }}</p>
+        </div>
+        <div class="rounded-xl bg-white/80 p-4">
+            <p class="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Skipped</p>
+            <p class="mt-1 font-display text-2xl text-slate-900">{{ index_result.stats.skipped }}</p>
+        </div>
+        <div class="rounded-xl bg-white/80 p-4">
+            <p class="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Failed</p>
+            <p class="mt-1 font-display text-2xl text-slate-900">{{ index_result.stats.failed }}</p>
+        </div>
+    </div>
+    <p class="mt-4 text-sm text-slate-600">
+        Empty: {{ index_result.stats.empty }} | Removed: {{ index_result.stats.removed }} | Duration: {{ "%.3fs"|format(index_result.stats.duration_seconds) }}
+    </p>
+    {% endif %}
+</div>
+<div class="mt-4 rounded-2xl border border-slate-200 bg-white/80 p-5">
+    <h3 class="font-display text-xl text-slate-900">Updated corpus summary</h3>
+    <div class="mt-4 grid gap-3 sm:grid-cols-2">
+        <div class="summary-chip">
+            <span class="summary-label">Documents</span>
+            <span class="summary-value">{{ index_result.summary.doc_count }}</span>
+        </div>
+        <div class="summary-chip">
+            <span class="summary-label">Chunks</span>
+            <span class="summary-value">{{ index_result.summary.chunk_count }}</span>
+        </div>
+        <div class="summary-chip">
+            <span class="summary-label">Preview rows</span>
+            <span class="summary-value">{{ index_result.summary.preview_count }}</span>
+        </div>
+        <div class="summary-chip">
+            <span class="summary-label">Semantic</span>
+            <span class="summary-value">{{ "Ready" if index_result.summary.semantic_configured else "Unavailable" }}</span>
+        </div>
+    </div>
+    {% if index_result.summary.error %}
+    <p class="mt-4 text-sm font-medium text-rose-700">{{ index_result.summary.error }}</p>
+    {% endif %}
+</div>
+{% else %}
+<div class="rounded-2xl border border-dashed border-slate-300 bg-white/70 p-5 text-sm text-slate-600">
+    Rebuild the index here when the folder changes. The CLI commands still work the same way.
+</div>
+{% endif %}

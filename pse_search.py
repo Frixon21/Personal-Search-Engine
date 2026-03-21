@@ -29,6 +29,7 @@ from pse_semantic import (
 
 
 SEARCH_DB_PRAGMAS = ("temp_store=MEMORY",)
+SEARCH_MODES = ("lexical", "semantic", "hybrid")
 SEARCH_HELP_TEXT = """Usage:
   python pse_search.py <root_folder> "<query>" [max_results] [options]
   python pse_search.py <root_folder> [max_results] --interactive [options]
@@ -120,6 +121,37 @@ class HybridRankedDoc:
     rec: int
     base_total: float
     total: float
+
+
+@dataclass(frozen=True)
+class SearchResult:
+    rank: int
+    doc_id: int
+    path: str
+    name: str
+    extension: str
+    size: int
+    mtime: float
+    preview_text: Optional[str]
+    chunk_text: Optional[str]
+    snippet_lines: Tuple[str, ...]
+    score: float
+    score_display: str
+    debug: Dict[str, object]
+
+
+@dataclass(frozen=True)
+class SearchResponse:
+    root: str
+    index_path: Optional[str]
+    query: str
+    query_terms: Tuple[str, ...]
+    mode: str
+    max_results: int
+    candidate_count: int
+    results: Tuple[SearchResult, ...]
+    error: Optional[str] = None
+    query_time_seconds: Optional[float] = None
 
 
 def gather_content_candidates(conn: sqlite3.Connection, q_terms: List[str]) -> Dict[int, Dict[str, int]]:
@@ -438,25 +470,238 @@ def semantic_structure_multiplier(chunk_text: str) -> float:
     return 1.0
 
 
-def validate_search_db(root: Path) -> Optional[Path]:
+def _resolve_search_db(root: Path) -> Tuple[Path, Optional[str]]:
     root = root.expanduser().resolve()
     dbp = db_path_for_root(root)
     if not dbp.exists():
-        print(f"No index found at: {dbp}")
-        print("Run: python pse_index.py index <root>")
+        return dbp, f"No index found at: {dbp}\nRun: python pse_index.py index <root>"
+
+    return dbp, None
+
+
+def validate_search_db(root: Path) -> Optional[Path]:
+    dbp, error = _resolve_search_db(root)
+    if error is not None:
+        print(error)
         return None
 
     return dbp
 
 
-def ensure_semantic_ready(conn: sqlite3.Connection, dbp: Path) -> bool:
+def _semantic_ready_error(conn: sqlite3.Connection, dbp: Path) -> Optional[str]:
     expected_meta = build_index_meta()
     if fetch_semantic_meta(conn) != expected_meta:
-        print(f"Index at {dbp} is outdated and must be rebuilt before semantic searching.")
-        print("Run: python pse_index.py index <root>")
+        return (
+            f"Index at {dbp} is outdated and must be rebuilt before semantic searching.\n"
+            "Run: python pse_index.py index <root>"
+        )
+
+    return None
+
+
+def ensure_semantic_ready(conn: sqlite3.Connection, dbp: Path) -> bool:
+    error = _semantic_ready_error(conn, dbp)
+    if error is not None:
+        print(error)
         return False
 
     return True
+
+
+def _normalize_search_mode(mode: str) -> str:
+    normalized = (mode or "hybrid").strip().casefold()
+    if normalized not in SEARCH_MODES:
+        raise ValueError(
+            f"Unsupported search mode: {mode}. Expected one of: {', '.join(SEARCH_MODES)}"
+        )
+    return normalized
+
+
+def _public_result_from_ranked_doc(
+    mode: str,
+    rank: int,
+    doc: RankedDoc | SemanticRankedDoc | HybridRankedDoc,
+    q_terms: List[str],
+) -> SearchResult:
+    path = Path(doc.path)
+    snippet_lines: Tuple[str, ...]
+    score: float
+    score_display: str
+    debug: Dict[str, object]
+    preview_text = doc.preview_text
+    chunk_text: Optional[str]
+
+    if mode == "lexical":
+        lexical_doc = doc
+        assert isinstance(lexical_doc, RankedDoc)
+        cu, ct, fn_hits, fn_sub, meta, fn_pos, rec = lexical_doc.debug
+        snippet_lines = tuple(_keyword_snippet(lexical_doc, q_terms) or ())
+        score = float(lexical_doc.total)
+        score_display = str(lexical_doc.total)
+        chunk_text = None
+        debug = {
+            "content_unique": cu,
+            "query_term_count": len(q_terms),
+            "content_hits": ct,
+            "filename_hits": fn_hits,
+            "filename_substring": fn_sub,
+            "metadata_bonus": meta,
+            "filename_position": fn_pos,
+            "recency_bonus": rec,
+        }
+    elif mode == "semantic":
+        semantic_doc = doc
+        assert isinstance(semantic_doc, SemanticRankedDoc)
+        fn_hits, fn_sub, meta, rec = semantic_doc.debug
+        snippet_lines = tuple(_semantic_snippet(semantic_doc, q_terms) or ())
+        score = semantic_doc.score
+        score_display = f"{semantic_doc.score:.4f}"
+        chunk_text = semantic_doc.chunk_text
+        debug = {
+            "semantic_similarity": semantic_doc.similarity,
+            "structure_multiplier": semantic_doc.structure_multiplier,
+            "base_score": semantic_doc.base_score,
+            "rerank_raw": semantic_doc.rerank_raw,
+            "rerank_bonus": semantic_doc.rerank_bonus,
+            "filename_hits": fn_hits,
+            "filename_substring": fn_sub,
+            "metadata_bonus": meta,
+            "recency_bonus": rec,
+        }
+    else:
+        hybrid_doc = doc
+        assert isinstance(hybrid_doc, HybridRankedDoc)
+        snippet_lines = tuple(_hybrid_snippet(hybrid_doc, q_terms) or ())
+        score = hybrid_doc.total
+        score_display = f"{hybrid_doc.total:.4f}"
+        chunk_text = hybrid_doc.chunk_text
+        debug = {
+            "lexical_raw": hybrid_doc.lexical_raw,
+            "lexical_norm": hybrid_doc.lexical_norm,
+            "semantic_raw": hybrid_doc.semantic_raw,
+            "semantic_norm": hybrid_doc.semantic_norm,
+            "semantic_similarity": hybrid_doc.semantic_similarity,
+            "semantic_structure_multiplier": hybrid_doc.semantic_structure_multiplier,
+            "rerank_raw": hybrid_doc.rerank_raw,
+            "rerank_bonus": hybrid_doc.rerank_bonus,
+            "filename_hits": hybrid_doc.fn_hits,
+            "filename_substring": hybrid_doc.fn_sub,
+            "metadata_bonus": hybrid_doc.meta,
+            "recency_bonus": hybrid_doc.rec,
+        }
+
+    return SearchResult(
+        rank=rank,
+        doc_id=doc.doc_id,
+        path=doc.path,
+        name=path.name,
+        extension=path.suffix.lower(),
+        size=doc.size,
+        mtime=doc.mtime,
+        preview_text=preview_text,
+        chunk_text=chunk_text,
+        snippet_lines=snippet_lines,
+        score=score,
+        score_display=score_display,
+        debug=debug,
+    )
+
+
+def run_search(
+    root: Path,
+    query_str: str,
+    *,
+    mode: str = "hybrid",
+    max_results: int = 20,
+) -> SearchResponse:
+    normalized_mode = _normalize_search_mode(mode)
+    root = root.expanduser().resolve()
+    if max_results <= 0:
+        raise ValueError("max_results must be positive.")
+
+    base_response = {
+        "root": str(root),
+        "index_path": None,
+        "query": query_str,
+        "query_terms": (),
+        "mode": normalized_mode,
+        "max_results": max_results,
+        "candidate_count": 0,
+        "results": (),
+    }
+
+    if not query_str.strip():
+        return SearchResponse(**base_response)
+
+    dbp, error = _resolve_search_db(root)
+    if error is not None:
+        return SearchResponse(
+            **{
+                **base_response,
+                "index_path": str(dbp),
+                "error": error,
+            }
+        )
+
+    build_ranked: Callable[[sqlite3.Connection, str], Tuple[List[str], List[Any]]]
+    rerank_ranked: Optional[Callable[[str, List[Any]], List[Any]]]
+    require_semantic = False
+    if normalized_mode == "lexical":
+        build_ranked = build_keyword_ranked_docs
+        rerank_ranked = None
+    elif normalized_mode == "semantic":
+        build_ranked = build_semantic_ranked_docs
+        rerank_ranked = rerank_top_semantic_docs
+        require_semantic = True
+    else:
+        build_ranked = build_hybrid_ranked_docs
+        rerank_ranked = rerank_top_hybrid_docs
+        require_semantic = True
+
+    conn = open_db_connection(dbp, SEARCH_DB_PRAGMAS)
+    try:
+        if require_semantic:
+            semantic_error = _semantic_ready_error(conn, dbp)
+            if semantic_error is not None:
+                return SearchResponse(
+                    **{
+                        **base_response,
+                        "index_path": str(dbp),
+                        "error": semantic_error,
+                    }
+                )
+
+        t0 = time.perf_counter()
+        q_terms, ranked = build_ranked(conn, query_str)
+        if rerank_ranked is not None:
+            ranked = rerank_ranked(query_str, ranked)
+        query_time = time.perf_counter() - t0
+
+        results = tuple(
+            _public_result_from_ranked_doc(normalized_mode, idx, doc, q_terms)
+            for idx, doc in enumerate(ranked[:max_results], start=1)
+        )
+        return SearchResponse(
+            root=str(root),
+            index_path=str(dbp),
+            query=query_str,
+            query_terms=tuple(q_terms),
+            mode=normalized_mode,
+            max_results=max_results,
+            candidate_count=len(ranked),
+            results=results,
+            query_time_seconds=query_time,
+        )
+    except SemanticSetupError as exc:
+        return SearchResponse(
+            **{
+                **base_response,
+                "index_path": str(dbp),
+                "error": str(exc),
+            }
+        )
+    finally:
+        conn.close()
 
 
 def build_keyword_ranked_docs(

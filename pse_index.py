@@ -558,7 +558,7 @@ def _build_aborted_stats(
     return stats
 
 
-def index_root(root: Path) -> IndexRunStats:
+def index_root(root: Path, *, quiet: bool = False) -> IndexRunStats:
     root = root.expanduser().resolve()
     if not root.exists() or not root.is_dir():
         raise ValueError(f"Index root does not exist or is not a directory: {root}")
@@ -582,8 +582,9 @@ def index_root(root: Path) -> IndexRunStats:
                 prior_conn.close()
 
             if existing_meta != semantic_meta:
-                print(f"Index DB: {dbp}")
-                print("Semantic configuration changed; rebuilding index.")
+                if not quiet:
+                    print(f"Index DB: {dbp}")
+                    print("Semantic configuration changed; rebuilding index.")
                 reset_index_db(dbp)
 
         stats = IndexRunStats(
@@ -662,7 +663,8 @@ def index_root(root: Path) -> IndexRunStats:
             finished_at=_timestamp_now(),
             duration_seconds=time.perf_counter() - started_perf,
         )
-        print_run_summary(stats)
+        if not quiet:
+            print_run_summary(stats)
         append_run_logs(root, stats)
         return stats
     except Exception as exc:

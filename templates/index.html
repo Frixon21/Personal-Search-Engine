@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="mb-8 grid gap-6 lg:grid-cols-[1.7fr_1fr]">
+    <div class="glass-panel overflow-hidden">
+        <div class="hero-band p-8">
+            <p class="text-sm font-semibold uppercase tracking-[0.08em] text-stone-600">Local file search</p>
+            <h1 class="mt-3 font-display text-4xl leading-tight text-slate-900 sm:text-5xl">Personal Search Engine</h1>
+            <p class="mt-4 max-w-2xl text-base text-slate-700 sm:text-lg">
+                Search the indexed files in a folder. Use lexical mode for exact terms, semantic mode for related meaning, or hybrid when you want both.
+            </p>
+        </div>
+        <div class="grid gap-6 p-6 lg:grid-cols-[1.5fr_0.9fr]">
+            <form
+                id="search-form"
+                class="space-y-5"
+                action="/search"
+                method="get"
+                hx-get="/search"
+                hx-target="#search-results"
+                hx-swap="innerHTML"
+                hx-push-url="true"
+                hx-indicator="#search-loading"
+            >
+                <div>
+                    <label for="query" class="field-label">Search query</label>
+                    <input
+                        id="query"
+                        name="query"
+                        type="text"
+                        value="{{ search.query }}"
+                        placeholder="Try: project sync recap"
+                        class="field-input text-base"
+                    >
+                </div>
+                <div class="grid gap-4 sm:grid-cols-3">
+                    <div>
+                        <label for="mode" class="field-label">Mode</label>
+                        <select id="mode" name="mode" class="field-input">
+                            {% for option in mode_options %}
+                            <option value="{{ option }}" {% if search.mode == option %}selected{% endif %}>{{ option|title }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div>
+                        <label for="top_k" class="field-label">Top results</label>
+                        <select id="top_k" name="top_k" class="field-input">
+                            {% for option in top_k_options %}
+                            <option value="{{ option }}" {% if search.top_k == option %}selected{% endif %}>{{ option }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div>
+                        <label for="search-root" class="field-label">Search folder</label>
+                        <input
+                            id="search-root"
+                            name="root"
+                            type="text"
+                            value="{{ search.root }}"
+                            class="field-input"
+                            placeholder="Folder to search"
+                        >
+                    </div>
+                </div>
+                <div class="flex flex-wrap items-center gap-3">
+                    <button type="submit" class="primary-button">Search files</button>
+                    <span id="search-loading" class="htmx-indicator text-sm font-medium text-slate-500">Searching...</span>
+                    {% if search.index_path %}
+                    <p class="text-sm text-slate-500">Index file: <span class="font-medium text-slate-700">{{ search.index_path }}</span></p>
+                    {% endif %}
+                </div>
+            </form>
+
+            <div class="rounded-2xl border border-stone-200 bg-white/85 p-5">
+                <h2 class="font-display text-xl text-slate-900">Corpus Status</h2>
+                <p class="mt-2 text-sm text-slate-600">A quick summary of the folder currently loaded in the search form.</p>
+                <div class="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
+                    <div class="summary-chip">
+                        <span class="summary-label">Index</span>
+                        <span class="summary-value">{{ "Present" if summary.index_present else "Missing" }}</span>
+                    </div>
+                    <div class="summary-chip">
+                        <span class="summary-label">Documents</span>
+                        <span class="summary-value">{{ summary.doc_count }}</span>
+                    </div>
+                    <div class="summary-chip">
+                        <span class="summary-label">Chunks</span>
+                        <span class="summary-value">{{ summary.chunk_count }}</span>
+                    </div>
+                    <div class="summary-chip">
+                        <span class="summary-label">Semantic Index</span>
+                        <span class="summary-value">{{ "Ready" if summary.semantic_configured else "Missing" }}</span>
+                    </div>
+                </div>
+                <div class="mt-4 space-y-1 text-sm text-slate-600">
+                    <p><span class="font-medium text-slate-800">Folder:</span> {{ summary.root }}</p>
+                    <p><span class="font-medium text-slate-800">Index file:</span> {{ summary.index_path }}</p>
+                    {% if summary.semantic_model_name %}
+                    <p><span class="font-medium text-slate-800">Model:</span> {{ summary.semantic_model_name }}</p>
+                    {% endif %}
+                    {% if summary.last_indexed_at %}
+                    <p><span class="font-medium text-slate-800">Last indexed:</span> {{ summary.last_indexed_at }}</p>
+                    {% endif %}
+                    {% if summary.error %}
+                    <p class="font-medium text-rose-700">{{ summary.error }}</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="glass-panel p-6">
+        <div>
+            <p class="text-sm font-semibold uppercase tracking-[0.08em] text-slate-500">Indexing</p>
+            <h2 class="mt-2 font-display text-2xl text-slate-900">Rebuild the index</h2>
+        </div>
+        <p class="mt-3 text-sm text-slate-600">
+            Choose a folder and rebuild the SQLite index used by both the CLI and the web UI.
+        </p>
+        <form
+            id="index-form"
+            class="mt-6 space-y-4"
+            action="/index"
+            method="post"
+            hx-post="/index"
+            hx-target="#index-status"
+            hx-swap="innerHTML"
+            hx-indicator="#index-loading"
+        >
+            <div>
+                <label for="index-root" class="field-label">Index folder</label>
+                <input
+                    id="index-root"
+                    name="root"
+                    type="text"
+                    value="{{ search.root }}"
+                    class="field-input"
+                    placeholder="Folder to index"
+                >
+            </div>
+            <div class="flex flex-wrap items-center gap-3">
+                <button type="submit" class="secondary-button">Rebuild index</button>
+                <span id="index-loading" class="htmx-indicator text-sm font-medium text-slate-500">Building index...</span>
+            </div>
+        </form>
+        <div id="index-status" class="mt-5">
+            {% include "partials/index_status.html" %}
+        </div>
+    </div>
+</section>
+
+<section id="search-results" class="glass-panel p-6 sm:p-8">
+    {% include "partials/search_results.html" %}
+</section>
+{% endblock %}
