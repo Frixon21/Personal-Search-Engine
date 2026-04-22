@@ -1,6 +1,4 @@
 __pycache__/
 .venv/
-Files/
 .vscode/*
 old/
-tests/*

@@ -1,0 +1,35 @@
+# Root-local indexing config for this search corpus.
+# The indexer auto-loads this file when you run:
+#   python pse_index.py index D:\Downloads\Capstone Masters\Personal Search Engine\Files
+
+[index]
+allowed_extensions = [
+  ".csv",
+  ".doc",
+  ".docx",
+  ".htm",
+  ".html",
+  ".js",
+  ".json",
+  ".log",
+  ".md",
+  ".odt",
+  ".pdf",
+  ".ppt",
+  ".pptx",
+  ".py",
+  ".rtf",
+  ".tex",
+  ".ts",
+  ".txt",
+  ".xls",
+  ".xlsx",
+  ".yaml",
+  ".yml",
+]
+max_bytes = 2000000
+ignore_folders = [
+  ".git",
+  "node_modules",
+  "__pycache__",
+]

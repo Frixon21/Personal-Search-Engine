@@ -1,0 +1,230 @@
+Run started: 2026-03-10T15:28:22-07:00
+Run finished: 2026-03-10T15:28:22-07:00
+Status: success
+Root: D:\Downloads\Capstone Masters\Personal Search Engine\Files
+Index DB: D:\Downloads\Capstone Masters\Personal Search Engine\Files\.pse_index.sqlite3
+Config: allowed_extensions=.csv,.doc,.docx,.htm,.html,.js,.json,.log,.md,.odt,.pdf,.ppt,.pptx,.py,.rtf,.tex,.ts,.txt,.xls,.xlsx,.yaml,.yml max_bytes=2000000 ignore_folders=.git,__pycache__,node_modules
+Scanned: 21
+Indexed: 0 | Empty: 0 | Skipped: 21 | Failed: 0 | Removed: 0
+Skip breakdown: unchanged=21 | extension=0 | size=0
+Time: 0.009s
+
+Run started: 2026-03-10T15:35:09-07:00
+Run finished: 2026-03-10T15:35:09-07:00
+Status: success
+Root: D:\Downloads\Capstone Masters\Personal Search Engine\Files
+Index DB: D:\Downloads\Capstone Masters\Personal Search Engine\Files\.pse_index.sqlite3
+Config: allowed_extensions=.csv,.doc,.docx,.htm,.html,.js,.json,.log,.md,.odt,.pdf,.ppt,.pptx,.py,.rtf,.tex,.ts,.txt,.xls,.xlsx,.yaml,.yml max_bytes=2000000 ignore_folders=.git,__pycache__,node_modules
+Scanned: 22
+Indexed: 0 | Empty: 0 | Skipped: 22 | Failed: 0 | Removed: 0
+Skip breakdown: unchanged=21 | extension=1 | size=0
+Time: 0.012s
+Extension-skip samples: D:\Downloads\Capstone Masters\Personal Search Engine\Files\pse_index.toml (ext=.toml)
+
+Run started: 2026-03-10T16:52:34-07:00
+Run finished: 2026-03-10T16:52:34-07:00
+Status: aborted
+Root: D:\Downloads\Capstone Masters\Personal Search Engine\Files
+Index DB: D:\Downloads\Capstone Masters\Personal Search Engine\Files\.pse_index.sqlite3
+Config: allowed_extensions=.csv,.doc,.docx,.htm,.html,.js,.json,.log,.md,.odt,.pdf,.ppt,.pptx,.py,.rtf,.tex,.ts,.txt,.xls,.xlsx,.yaml,.yml max_bytes=2000000 ignore_folders=.git,__pycache__,node_modules
+Scanned: 0
+Indexed: 0 | Empty: 0 | Skipped: 0 | Failed: 0 | Removed: 0
+Skip breakdown: unchanged=0 | extension=0 | size=0
+Time: 0.008s
+Error: Semantic indexing/search requires 'sentence-transformers' with a working PyTorch install. Install the dependency, then rerun indexing.
+
+Run started: 2026-03-10T17:09:59-07:00
+Run finished: 2026-03-10T17:10:30-07:00
+Status: success
+Root: D:\Downloads\Capstone Masters\Personal Search Engine\Files
+Index DB: D:\Downloads\Capstone Masters\Personal Search Engine\Files\.pse_index.sqlite3
+Config: allowed_extensions=.csv,.doc,.docx,.htm,.html,.js,.json,.log,.md,.odt,.pdf,.ppt,.pptx,.py,.rtf,.tex,.ts,.txt,.xls,.xlsx,.yaml,.yml max_bytes=2000000 ignore_folders=.git,__pycache__,node_modules
+Scanned: 22
+Indexed: 14 | Empty: 7 | Skipped: 1 | Failed: 0 | Removed: 0
+Skip breakdown: unchanged=0 | extension=1 | size=0
+Time: 30.705s
+Extension-skip samples: D:\Downloads\Capstone Masters\Personal Search Engine\Files\pse_index.toml (ext=.toml)
+
+Run started: 2026-03-10T17:22:39-07:00
+Run finished: 2026-03-10T17:22:52-07:00
+Status: success
+Root: D:\Downloads\Capstone Masters\Personal Search Engine\Files
+Index DB: D:\Downloads\Capstone Masters\Personal Search Engine\Files\.pse_index.sqlite3
+Config: allowed_extensions=.csv,.doc,.docx,.htm,.html,.js,.json,.log,.md,.odt,.pdf,.ppt,.pptx,.py,.rtf,.tex,.ts,.txt,.xls,.xlsx,.yaml,.yml max_bytes=2000000 ignore_folders=.git,__pycache__,node_modules
+Scanned: 22
+Indexed: 0 | Empty: 0 | Skipped: 22 | Failed: 0 | Removed: 0
+Skip breakdown: unchanged=21 | extension=1 | size=0
+Time: 13.044s
+Extension-skip samples: D:\Downloads\Capstone Masters\Personal Search Engine\Files\pse_index.toml (ext=.toml)
+
+Run started: 2026-03-10T18:57:31-07:00
+Run finished: 2026-03-10T18:57:44-07:00
+Status: success
+Root: D:\Downloads\Capstone Masters\Personal Search Engine\Files
+Index DB: D:\Downloads\Capstone Masters\Personal Search Engine\Files\.pse_index.sqlite3
+Config: allowed_extensions=.csv,.doc,.docx,.htm,.html,.js,.json,.log,.md,.odt,.pdf,.ppt,.pptx,.py,.rtf,.tex,.ts,.txt,.xls,.xlsx,.yaml,.yml max_bytes=2000000 ignore_folders=.git,__pycache__,node_modules
+Scanned: 22
+Indexed: 0 | Empty: 0 | Skipped: 22 | Failed: 0 | Removed: 0
+Skip breakdown: unchanged=21 | extension=1 | size=0
+Time: 13.673s
+Extension-skip samples: D:\Downloads\Capstone Masters\Personal Search Engine\Files\pse_index.toml (ext=.toml)
+
+Run started: 2026-03-10T23:22:28-07:00
+Run finished: 2026-03-10T23:22:40-07:00
+Status: success
+Root: D:\Downloads\Capstone Masters\Personal Search Engine\Files
+Index DB: D:\Downloads\Capstone Masters\Personal Search Engine\Files\.pse_index.sqlite3
+Config: allowed_extensions=.csv,.doc,.docx,.htm,.html,.js,.json,.log,.md,.odt,.pdf,.ppt,.pptx,.py,.rtf,.tex,.ts,.txt,.xls,.xlsx,.yaml,.yml max_bytes=2000000 ignore_folders=.git,__pycache__,node_modules
+Scanned: 23
+Indexed: 1 | Empty: 0 | Skipped: 22 | Failed: 0 | Removed: 0
+Skip breakdown: unchanged=21 | extension=1 | size=0
+Time: 12.242s
+Extension-skip samples: D:\Downloads\Capstone Masters\Personal Search Engine\Files\pse_index.toml (ext=.toml)
+
+Run started: 2026-03-10T23:39:23-07:00
+Run finished: 2026-03-10T23:39:46-07:00
+Status: success
+Root: D:\Downloads\Capstone Masters\Personal Search Engine\Files
+Index DB: D:\Downloads\Capstone Masters\Personal Search Engine\Files\.pse_index.sqlite3
+Config: allowed_extensions=.csv,.doc,.docx,.htm,.html,.js,.json,.log,.md,.odt,.pdf,.ppt,.pptx,.py,.rtf,.tex,.ts,.txt,.xls,.xlsx,.yaml,.yml max_bytes=2000000 ignore_folders=.git,__pycache__,node_modules
+Scanned: 23
+Indexed: 15 | Empty: 7 | Skipped: 1 | Failed: 0 | Removed: 0
+Skip breakdown: unchanged=0 | extension=1 | size=0
+Time: 22.500s
+Extension-skip samples: D:\Downloads\Capstone Masters\Personal Search Engine\Files\pse_index.toml (ext=.toml)
+
+Run started: 2026-03-10T23:41:53-07:00
+Run finished: 2026-03-10T23:42:06-07:00
+Status: success
+Root: D:\Downloads\Capstone Masters\Personal Search Engine\Files
+Index DB: D:\Downloads\Capstone Masters\Personal Search Engine\Files\.pse_index.sqlite3
+Config: allowed_extensions=.csv,.doc,.docx,.htm,.html,.js,.json,.log,.md,.odt,.pdf,.ppt,.pptx,.py,.rtf,.tex,.ts,.txt,.xls,.xlsx,.yaml,.yml max_bytes=2000000 ignore_folders=.git,__pycache__,node_modules
+Scanned: 23
+Indexed: 0 | Empty: 0 | Skipped: 23 | Failed: 0 | Removed: 0
+Skip breakdown: unchanged=22 | extension=1 | size=0
+Time: 12.641s
+Extension-skip samples: D:\Downloads\Capstone Masters\Personal Search Engine\Files\pse_index.toml (ext=.toml)
+
+Run started: 2026-03-10T23:46:18-07:00
+Run finished: 2026-03-10T23:46:30-07:00
+Status: success
+Root: D:\Downloads\Capstone Masters\Personal Search Engine\Files
+Index DB: D:\Downloads\Capstone Masters\Personal Search Engine\Files\.pse_index.sqlite3
+Config: allowed_extensions=.csv,.doc,.docx,.htm,.html,.js,.json,.log,.md,.odt,.pdf,.ppt,.pptx,.py,.rtf,.tex,.ts,.txt,.xls,.xlsx,.yaml,.yml max_bytes=2000000 ignore_folders=.git,__pycache__,node_modules
+Scanned: 26
+Indexed: 3 | Empty: 0 | Skipped: 22 | Failed: 1 | Removed: 1
+Skip breakdown: unchanged=21 | extension=1 | size=0
+Time: 11.844s
+Extension-skip samples: D:\Downloads\Capstone Masters\Personal Search Engine\Files\pse_index.toml (ext=.toml)
+Failed samples: D:\Downloads\Capstone Masters\Personal Search Engine\Files\Semantic\~$lease_incident_report.docx
+Removed samples: D:\Downloads\Capstone Masters\Personal Search Engine\Files\Project Sync Recap.txt
+
+Run started: 2026-03-10T23:46:44-07:00
+Run finished: 2026-03-10T23:46:55-07:00
+Status: success
+Root: D:\Downloads\Capstone Masters\Personal Search Engine\Files
+Index DB: D:\Downloads\Capstone Masters\Personal Search Engine\Files\.pse_index.sqlite3
+Config: allowed_extensions=.csv,.doc,.docx,.htm,.html,.js,.json,.log,.md,.odt,.pdf,.ppt,.pptx,.py,.rtf,.tex,.ts,.txt,.xls,.xlsx,.yaml,.yml max_bytes=2000000 ignore_folders=.git,__pycache__,node_modules
+Scanned: 25
+Indexed: 0 | Empty: 0 | Skipped: 25 | Failed: 0 | Removed: 1
+Skip breakdown: unchanged=24 | extension=1 | size=0
+Time: 11.306s
+Extension-skip samples: D:\Downloads\Capstone Masters\Personal Search Engine\Files\pse_index.toml (ext=.toml)
+Removed samples: D:\Downloads\Capstone Masters\Personal Search Engine\Files\Semantic\~$lease_incident_report.docx
+
+Run started: 2026-03-10T23:47:06-07:00
+Run finished: 2026-03-10T23:47:18-07:00
+Status: success
+Root: D:\Downloads\Capstone Masters\Personal Search Engine\Files
+Index DB: D:\Downloads\Capstone Masters\Personal Search Engine\Files\.pse_index.sqlite3
+Config: allowed_extensions=.csv,.doc,.docx,.htm,.html,.js,.json,.log,.md,.odt,.pdf,.ppt,.pptx,.py,.rtf,.tex,.ts,.txt,.xls,.xlsx,.yaml,.yml max_bytes=2000000 ignore_folders=.git,__pycache__,node_modules
+Scanned: 25
+Indexed: 0 | Empty: 0 | Skipped: 25 | Failed: 0 | Removed: 0
+Skip breakdown: unchanged=24 | extension=1 | size=0
+Time: 11.811s
+Extension-skip samples: D:\Downloads\Capstone Masters\Personal Search Engine\Files\pse_index.toml (ext=.toml)
+
+Run started: 2026-03-11T00:13:49-07:00
+Run finished: 2026-03-11T00:14:11-07:00
+Status: success
+Root: D:\Downloads\Capstone Masters\Personal Search Engine\Files
+Index DB: D:\Downloads\Capstone Masters\Personal Search Engine\Files\.pse_index.sqlite3
+Config: allowed_extensions=.csv,.doc,.docx,.htm,.html,.js,.json,.log,.md,.odt,.pdf,.ppt,.pptx,.py,.rtf,.tex,.ts,.txt,.xls,.xlsx,.yaml,.yml max_bytes=2000000 ignore_folders=.git,__pycache__,node_modules
+Scanned: 25
+Indexed: 17 | Empty: 7 | Skipped: 1 | Failed: 0 | Removed: 0
+Skip breakdown: unchanged=0 | extension=1 | size=0
+Time: 22.255s
+Extension-skip samples: D:\Downloads\Capstone Masters\Personal Search Engine\Files\pse_index.toml (ext=.toml)
+
+Run started: 2026-03-11T00:15:25-07:00
+Run finished: 2026-03-11T00:15:47-07:00
+Status: success
+Root: D:\Downloads\Capstone Masters\Personal Search Engine\Files
+Index DB: D:\Downloads\Capstone Masters\Personal Search Engine\Files\.pse_index.sqlite3
+Config: allowed_extensions=.csv,.doc,.docx,.htm,.html,.js,.json,.log,.md,.odt,.pdf,.ppt,.pptx,.py,.rtf,.tex,.ts,.txt,.xls,.xlsx,.yaml,.yml max_bytes=2000000 ignore_folders=.git,__pycache__,node_modules
+Scanned: 25
+Indexed: 17 | Empty: 7 | Skipped: 1 | Failed: 0 | Removed: 0
+Skip breakdown: unchanged=0 | extension=1 | size=0
+Time: 22.412s
+Extension-skip samples: D:\Downloads\Capstone Masters\Personal Search Engine\Files\pse_index.toml (ext=.toml)
+
+Run started: 2026-03-11T00:17:06-07:00
+Run finished: 2026-03-11T00:17:28-07:00
+Status: success
+Root: D:\Downloads\Capstone Masters\Personal Search Engine\Files
+Index DB: D:\Downloads\Capstone Masters\Personal Search Engine\Files\.pse_index.sqlite3
+Config: allowed_extensions=.csv,.doc,.docx,.htm,.html,.js,.json,.log,.md,.odt,.pdf,.ppt,.pptx,.py,.rtf,.tex,.ts,.txt,.xls,.xlsx,.yaml,.yml max_bytes=2000000 ignore_folders=.git,__pycache__,node_modules
+Scanned: 25
+Indexed: 17 | Empty: 7 | Skipped: 1 | Failed: 0 | Removed: 0
+Skip breakdown: unchanged=0 | extension=1 | size=0
+Time: 22.256s
+Extension-skip samples: D:\Downloads\Capstone Masters\Personal Search Engine\Files\pse_index.toml (ext=.toml)
+
+Run started: 2026-03-11T00:20:26-07:00
+Run finished: 2026-03-11T00:20:38-07:00
+Status: success
+Root: D:\Downloads\Capstone Masters\Personal Search Engine\Files
+Index DB: D:\Downloads\Capstone Masters\Personal Search Engine\Files\.pse_index.sqlite3
+Config: allowed_extensions=.csv,.doc,.docx,.htm,.html,.js,.json,.log,.md,.odt,.pdf,.ppt,.pptx,.py,.rtf,.tex,.ts,.txt,.xls,.xlsx,.yaml,.yml max_bytes=2000000 ignore_folders=.git,__pycache__,node_modules
+Scanned: 25
+Indexed: 0 | Empty: 0 | Skipped: 25 | Failed: 0 | Removed: 0
+Skip breakdown: unchanged=24 | extension=1 | size=0
+Time: 12.096s
+Extension-skip samples: D:\Downloads\Capstone Masters\Personal Search Engine\Files\pse_index.toml (ext=.toml)
+
+Run started: 2026-03-11T00:34:12-07:00
+Run finished: 2026-03-11T00:34:25-07:00
+Status: success
+Root: D:\Downloads\Capstone Masters\Personal Search Engine\Files
+Index DB: D:\Downloads\Capstone Masters\Personal Search Engine\Files\.pse_index.sqlite3
+Config: allowed_extensions=.csv,.doc,.docx,.htm,.html,.js,.json,.log,.md,.odt,.pdf,.ppt,.pptx,.py,.rtf,.tex,.ts,.txt,.xls,.xlsx,.yaml,.yml max_bytes=2000000 ignore_folders=.git,__pycache__,node_modules
+Scanned: 25
+Indexed: 0 | Empty: 0 | Skipped: 25 | Failed: 0 | Removed: 0
+Skip breakdown: unchanged=24 | extension=1 | size=0
+Time: 13.328s
+Extension-skip samples: D:\Downloads\Capstone Masters\Personal Search Engine\Files\pse_index.toml (ext=.toml)
+
+Run started: 2026-03-11T00:52:21-07:00
+Run finished: 2026-03-11T00:52:35-07:00
+Status: success
+Root: D:\Downloads\Capstone Masters\Personal Search Engine\Files
+Index DB: D:\Downloads\Capstone Masters\Personal Search Engine\Files\.pse_index.sqlite3
+Config: allowed_extensions=.csv,.doc,.docx,.htm,.html,.js,.json,.log,.md,.odt,.pdf,.ppt,.pptx,.py,.rtf,.tex,.ts,.txt,.xls,.xlsx,.yaml,.yml max_bytes=2000000 ignore_folders=.git,__pycache__,node_modules
+Scanned: 25
+Indexed: 0 | Empty: 0 | Skipped: 25 | Failed: 0 | Removed: 0
+Skip breakdown: unchanged=24 | extension=1 | size=0
+Time: 14.233s
+Extension-skip samples: D:\Downloads\Capstone Masters\Personal Search Engine\Files\pse_index.toml (ext=.toml)
+
+Run started: 2026-03-20T12:18:46-07:00
+Run finished: 2026-03-20T12:18:55-07:00
+Status: success
+Root: D:\Downloads\Capstone Masters\Personal Search Engine\Files
+Index DB: D:\Downloads\Capstone Masters\Personal Search Engine\Files\.pse_index.sqlite3
+Config: allowed_extensions=.csv,.doc,.docx,.htm,.html,.js,.json,.log,.md,.odt,.pdf,.ppt,.pptx,.py,.rtf,.tex,.ts,.txt,.xls,.xlsx,.yaml,.yml max_bytes=2000000 ignore_folders=.git,__pycache__,node_modules
+Scanned: 25
+Indexed: 0 | Empty: 0 | Skipped: 25 | Failed: 0 | Removed: 0
+Skip breakdown: unchanged=24 | extension=1 | size=0
+Time: 8.718s
+Extension-skip samples: D:\Downloads\Capstone Masters\Personal Search Engine\Files\pse_index.toml (ext=.toml)
+

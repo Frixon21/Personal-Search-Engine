@@ -1,0 +1,12 @@
+Today we reviewed the current status of the capstone search engine.
+I discussed recent progress, unresolved issues, and next actions.
+
+Main points:
+- indexing pipeline was stabilized
+- additional file formats were added
+- semantic retrieval was implemented
+- hybrid ranking now combines keyword and meaning-based search
+
+Next steps:
+- build a simple web interface
+- get started on image search
